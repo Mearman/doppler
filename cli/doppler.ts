@@ -10,6 +10,15 @@ import { loadDatasetFile, readWavFile, saveDatasetBundle } from '../src/node/ent
 import { LinearFlightSegment, LocationSession } from '../src/schemas';
 import { DopplerSessionEngine } from '../src/solver/session';
 
+const PackageManifest = z.object({
+  version: z.string(),
+});
+
+/** The package version, read from the package.json that sits one directory above both `cli/` and `dist-cli/`. */
+function getCliVersion(): string {
+  return PackageManifest.parse(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))).version;
+}
+
 function formatCpaTime(cpaTimeSec: number): string {
   if (cpaTimeSec > 1_000_000_000) {
     return new Date(cpaTimeSec * 1000).toLocaleTimeString();
@@ -46,7 +55,7 @@ function run(): void {
     return;
   }
   if (args.includes('-v') || args.includes('--version')) {
-    console.log('doppler v0.1.0');
+    console.log(`doppler v${getCliVersion()}`);
 
     return;
   }
