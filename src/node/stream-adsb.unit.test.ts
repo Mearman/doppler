@@ -251,9 +251,9 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
       // 0.0014 degrees of latitude every 10 s is about 15 m/s; 0.0128 is about 142 m/s.
       const fastLeg = (step: number): RawAdsbTraceFile['trace'] => Array.from({ length: 12 }, (_, index) => [index * 10, 51.7 + index * step, -1.3, 3000, 0, 0]);
       const speedMps = (0.0128 * FAST_MPS_PER_DEG) / 10;
-      const unclassified = processRawAdsbTrace({ icao: 'ae0001', t: 'A20N', trace: fastLeg(0.0128) }, '2026-09-08', base);
-      const piston = processRawAdsbTrace({ icao: 'ae0002', t: 'C172', trace: fastLeg(0.0128) }, '2026-09-08', base);
-      const slowUnclassified = processRawAdsbTrace({ icao: 'ae0003', t: 'ZZZZ', trace: fastLeg(0.0014) }, '2026-09-08', base);
+      const unclassified = processRawAdsbTrace({ icao: 'ae0001', t: 'A20N', trace: fastLeg(0.0128) }, '2026-09-08', TRACE_BASE_EPOCH_SEC);
+      const piston = processRawAdsbTrace({ icao: 'ae0002', t: 'C172', trace: fastLeg(0.0128) }, '2026-09-08', TRACE_BASE_EPOCH_SEC);
+      const slowUnclassified = processRawAdsbTrace({ icao: 'ae0003', t: 'ZZZZ', trace: fastLeg(0.0014) }, '2026-09-08', TRACE_BASE_EPOCH_SEC);
 
       expect(speedMps).toBeGreaterThan(100);
       expect(unclassified).toEqual([]);
