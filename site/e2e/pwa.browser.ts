@@ -116,4 +116,15 @@ test.describe('Doppler PWA Offline Geolocation', () => {
 
     await expect(page.locator('text=Estimated Location')).toBeVisible({ timeout: 10000 });
   });
+
+  test('links the header to the release or commit this build came from', async ({ page }) => {
+    await page.goto('/');
+    const link = page.locator('header a[target="_blank"]');
+
+    // A build whose tag is on its commit links to the release; any other build links to its commit, never to a release that does not exist.
+    await expect(link).toHaveAttribute('href', /^https:\/\/github\.com\/Mearman\/doppler\/(releases\/tag\/v\d+\.\d+\.\d+|commit\/[0-9a-f]{40})$/);
+    await expect(link).toHaveText(/^(v\d+\.\d+\.\d+|[0-9a-f]{7,})$/);
+    await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
 });
+

@@ -4,6 +4,7 @@ packages: []
 saveExact: true
 
 minimumReleaseAgeExclude:
+  - "@exadev/build-identity"
   - "@exadev/eslint-config"
   - "trilean"
   - "trilean-regex"
