@@ -10,10 +10,59 @@ const FORMAT_EXTENSIBLE = 0xfffe;
 const EXTENSIBLE_SUBFORMAT_OFFSET = 24;
 /** Smallest `fmt ` chunk body: tag, channels, rate, byte rate, block align, bits. */
 const MIN_FMT_BODY_BYTES = 16;
+/** Offset of the 16-bit channel count inside a `fmt ` chunk body, after the 16-bit tag. */
+const FMT_CHANNELS_OFFSET = 2;
+/** Offset of the 32-bit sample rate inside a `fmt ` chunk body. */
+const FMT_SAMPLE_RATE_OFFSET = 4;
+/** Offset of the 32-bit byte rate inside a `fmt ` chunk body. */
+const FMT_BYTE_RATE_OFFSET = 8;
+/** Offset of the 16-bit block align inside a `fmt ` chunk body. */
+const FMT_BLOCK_ALIGN_OFFSET = 12;
+/** Offset of the 16-bit bits per sample inside a `fmt ` chunk body. */
+const FMT_BITS_PER_SAMPLE_OFFSET = 14;
+/** Bytes of a four-character code: a chunk id or the RIFF form type. */
+const FOUR_CC_BYTES = 4;
 /** Bytes of a chunk header: four-character id and a 32-bit size. */
-const CHUNK_HEADER_BYTES = 8;
+const CHUNK_HEADER_BYTES = FOUR_CC_BYTES + FOUR_CC_BYTES;
 /** Bytes of the RIFF preamble: `RIFF`, size and `WAVE`. */
-const RIFF_PREAMBLE_BYTES = 12;
+const RIFF_PREAMBLE_BYTES = CHUNK_HEADER_BYTES + FOUR_CC_BYTES;
+/** Offset of the `fmt ` chunk body in the files this encoder writes: the first chunk follows the RIFF preamble. */
+const FMT_BODY_OFFSET = RIFF_PREAMBLE_BYTES + CHUNK_HEADER_BYTES;
+/** Offset of the `data` chunk, which follows the minimal `fmt ` chunk. */
+const DATA_CHUNK_OFFSET = FMT_BODY_OFFSET + MIN_FMT_BODY_BYTES;
+/** Bytes of the header this encoder writes before the first sample: the RIFF preamble, the `fmt ` chunk and the `data` chunk header. */
+const WAV_HEADER_BYTES = DATA_CHUNK_OFFSET + CHUNK_HEADER_BYTES;
+/** Bits in a byte. */
+const BITS_PER_BYTE = 8;
+
+/** Bit depth of unsigned 8-bit PCM. */
+const PCM_BITS_UINT8 = 8;
+/** Bit depth of signed 16-bit PCM. */
+const PCM_BITS_INT16 = 16;
+/** Bit depth of signed 24-bit PCM. */
+const PCM_BITS_INT24 = 24;
+/** Bit depth of signed 32-bit PCM. */
+const PCM_BITS_INT32 = 32;
+/** Bit depth of single-precision float samples. */
+const FLOAT_BITS_SINGLE = 32;
+/** Bit depth of double-precision float samples. */
+const FLOAT_BITS_DOUBLE = 64;
+
+/** Magnitude of the most negative signed integer of a bit depth, which maps to -1.0. */
+const signedFullScale = (bits: number): number => 2 ** (bits - 1);
+/** Unsigned 8-bit PCM value that is silence, and the divisor that maps its offset from silence to `[-1, 1)`. */
+const UINT8_MIDPOINT = signedFullScale(PCM_BITS_UINT8);
+/** Divisor that maps a signed 16-bit sample to `[-1, 1)`. */
+const INT16_FULL_SCALE = signedFullScale(PCM_BITS_INT16);
+/** Divisor that maps a signed 24-bit sample to `[-1, 1)`. */
+const INT24_FULL_SCALE = signedFullScale(PCM_BITS_INT24);
+/** Divisor that maps a signed 32-bit sample to `[-1, 1)`. */
+const INT32_FULL_SCALE = signedFullScale(PCM_BITS_INT32);
+
+/** Bytes of one sample written by `encodeWavPcm16`. */
+const PCM16_BYTES_PER_SAMPLE = PCM_BITS_INT16 / BITS_PER_BYTE;
+/** Channel count written by `encodeWavPcm16`. */
+const ENCODED_CHANNELS = 1;
 
 interface WavFormat {
   readonly tag: number;
@@ -23,7 +72,7 @@ interface WavFormat {
 }
 
 function fourCc(view: DataView, offset: number): string {
-  return String.fromCharCode(view.getUint8(offset), view.getUint8(offset + 1), view.getUint8(offset + 2), view.getUint8(offset + 3));
+  return String.fromCharCode(...Array.from({ length: FOUR_CC_BYTES }, (_, index) => view.getUint8(offset + index)));
 }
 
 function readFormat(view: DataView, bodyOffset: number, bodySize: number): WavFormat {
@@ -40,9 +89,9 @@ function readFormat(view: DataView, bodyOffset: number, bodySize: number): WavFo
 
   return {
     tag,
-    channels: view.getUint16(bodyOffset + 2, true),
-    sampleRateHz: view.getUint32(bodyOffset + 4, true),
-    bitsPerSample: view.getUint16(bodyOffset + 14, true),
+    channels: view.getUint16(bodyOffset + FMT_CHANNELS_OFFSET, true),
+    sampleRateHz: view.getUint32(bodyOffset + FMT_SAMPLE_RATE_OFFSET, true),
+    bitsPerSample: view.getUint16(bodyOffset + FMT_BITS_PER_SAMPLE_OFFSET, true),
   };
 }
 
@@ -57,23 +106,29 @@ function readFormat(view: DataView, bodyOffset: number, bodySize: number): WavFo
 function readSample(view: DataView, position: number, format: Readonly<WavFormat>): number {
   const { tag, bitsPerSample } = format;
   if (tag === FORMAT_FLOAT) {
-    if (bitsPerSample === 32) {
+    if (bitsPerSample === FLOAT_BITS_SINGLE) {
       return view.getFloat32(position, true);
     }
-    if (bitsPerSample === 64) {
+    if (bitsPerSample === FLOAT_BITS_DOUBLE) {
       return view.getFloat64(position, true);
     }
   } else if (tag === FORMAT_PCM) {
-    // 8-bit PCM is unsigned and centred on 128; every wider depth is signed two's complement.
+    // 8-bit PCM is unsigned and centred on its midpoint; every wider depth is signed two's complement.
     switch (bitsPerSample) {
-      case 8:
-        return (view.getUint8(position) - 128) / 128;
-      case 16:
-        return view.getInt16(position, true) / 32768;
-      case 24:
-        return ((view.getInt8(position + 2) << 16) | (view.getUint8(position + 1) << 8) | view.getUint8(position)) / 8388608;
-      case 32:
-        return view.getInt32(position, true) / 2147483648;
+      case PCM_BITS_UINT8:
+        return (view.getUint8(position) - UINT8_MIDPOINT) / UINT8_MIDPOINT;
+      case PCM_BITS_INT16:
+        return view.getInt16(position, true) / INT16_FULL_SCALE;
+      case PCM_BITS_INT24:
+        // Little-endian: the top byte is read signed so that the shifted value carries the sign.
+        return (
+          ((view.getInt8(position + 2) << (2 * BITS_PER_BYTE)) |
+            (view.getUint8(position + 1) << BITS_PER_BYTE) |
+            view.getUint8(position)) /
+          INT24_FULL_SCALE
+        );
+      case PCM_BITS_INT32:
+        return view.getInt32(position, true) / INT32_FULL_SCALE;
       default:
     }
   }
@@ -91,14 +146,15 @@ export function decodeWavBytes(wavBytes: Readonly<Uint8Array>): {
   readonly sampleRateHz: number;
 } {
   if (wavBytes.byteLength < RIFF_PREAMBLE_BYTES) {
-    throw new Error('WAV buffer is shorter than the 12-byte RIFF preamble');
+    throw new Error(`WAV buffer is shorter than the ${String(RIFF_PREAMBLE_BYTES)}-byte RIFF preamble`);
   }
   const view = new DataView(wavBytes.buffer, wavBytes.byteOffset, wavBytes.byteLength);
   const riff = fourCc(view, 0);
   if (riff !== 'RIFF') {
     throw new Error(`Expected RIFF header, got ${riff}`);
   }
-  const form = fourCc(view, 8);
+  // The form type follows the `RIFF` id and the size, so it sits where a chunk body would.
+  const form = fourCc(view, CHUNK_HEADER_BYTES);
   if (form !== 'WAVE') {
     throw new Error(`Expected WAVE form, got ${form}`);
   }
@@ -109,7 +165,7 @@ export function decodeWavBytes(wavBytes: Readonly<Uint8Array>): {
   let cursor = RIFF_PREAMBLE_BYTES;
   while (cursor + CHUNK_HEADER_BYTES <= wavBytes.byteLength) {
     const chunkId = fourCc(view, cursor);
-    const chunkSize = view.getUint32(cursor + 4, true);
+    const chunkSize = view.getUint32(cursor + FOUR_CC_BYTES, true);
     const bodyOffset = cursor + CHUNK_HEADER_BYTES;
     if (chunkId === 'fmt ') {
       format = readFormat(view, bodyOffset, Math.min(chunkSize, wavBytes.byteLength - bodyOffset));
@@ -134,7 +190,7 @@ export function decodeWavBytes(wavBytes: Readonly<Uint8Array>): {
     throw new Error('WAV file declares no channels');
   }
 
-  const bytesPerSample = format.bitsPerSample / 8;
+  const bytesPerSample = format.bitsPerSample / BITS_PER_BYTE;
   const frameStride = format.channels * bytesPerSample;
   const numFrames = Math.floor(dataLength / frameStride);
   const channels = Array.from({ length: format.channels }, () => new Float32Array(numFrames));
@@ -157,8 +213,8 @@ export function decodeWavBytes(wavBytes: Readonly<Uint8Array>): {
  * @returns Complete `.wav` file bytes.
  */
 export function encodeWavPcm16(samples: Readonly<Float32Array>, sampleRateHz: number): Uint8Array {
-  const dataBytes = samples.length * 2;
-  const buffer = new ArrayBuffer(44 + dataBytes);
+  const dataBytes = samples.length * PCM16_BYTES_PER_SAMPLE;
+  const buffer = new ArrayBuffer(WAV_HEADER_BYTES + dataBytes);
   const view = new DataView(buffer);
 
   const writeAscii = (offset: number, str: string): void => {
@@ -168,23 +224,24 @@ export function encodeWavPcm16(samples: Readonly<Float32Array>, sampleRateHz: nu
   };
 
   writeAscii(0, 'RIFF');
-  view.setUint32(4, 36 + dataBytes, true);
-  writeAscii(8, 'WAVE');
-  writeAscii(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRateHz, true);
-  view.setUint32(28, sampleRateHz * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeAscii(36, 'data');
-  view.setUint32(40, dataBytes, true);
+  // The RIFF size counts every byte after the `RIFF` id and the size field itself.
+  view.setUint32(FOUR_CC_BYTES, WAV_HEADER_BYTES - CHUNK_HEADER_BYTES + dataBytes, true);
+  writeAscii(CHUNK_HEADER_BYTES, 'WAVE');
+  writeAscii(RIFF_PREAMBLE_BYTES, 'fmt ');
+  view.setUint32(RIFF_PREAMBLE_BYTES + FOUR_CC_BYTES, MIN_FMT_BODY_BYTES, true);
+  view.setUint16(FMT_BODY_OFFSET, FORMAT_PCM, true);
+  view.setUint16(FMT_BODY_OFFSET + FMT_CHANNELS_OFFSET, ENCODED_CHANNELS, true);
+  view.setUint32(FMT_BODY_OFFSET + FMT_SAMPLE_RATE_OFFSET, sampleRateHz, true);
+  view.setUint32(FMT_BODY_OFFSET + FMT_BYTE_RATE_OFFSET, sampleRateHz * PCM16_BYTES_PER_SAMPLE, true);
+  view.setUint16(FMT_BODY_OFFSET + FMT_BLOCK_ALIGN_OFFSET, PCM16_BYTES_PER_SAMPLE, true);
+  view.setUint16(FMT_BODY_OFFSET + FMT_BITS_PER_SAMPLE_OFFSET, PCM_BITS_INT16, true);
+  writeAscii(DATA_CHUNK_OFFSET, 'data');
+  view.setUint32(DATA_CHUNK_OFFSET + FOUR_CC_BYTES, dataBytes, true);
 
   for (let i = 0; i < samples.length; i += 1) {
     const clamped = Math.max(-1, Math.min(1, samples[i] ?? 0));
-    const int16 = clamped < 0 ? Math.round(clamped * 32768) : Math.round(clamped * 32767);
-    view.setInt16(44 + i * 2, int16, true);
+    const int16 = clamped < 0 ? Math.round(clamped * INT16_FULL_SCALE) : Math.round(clamped * (INT16_FULL_SCALE - 1));
+    view.setInt16(WAV_HEADER_BYTES + i * PCM16_BYTES_PER_SAMPLE, int16, true);
   }
 
   return new Uint8Array(buffer);
