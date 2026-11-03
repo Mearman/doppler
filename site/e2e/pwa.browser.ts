@@ -38,11 +38,15 @@ test.describe('Doppler PWA Offline Geolocation', () => {
 
     const micButton = page.locator('button:has-text("Start Mic")');
     await expect(micButton).toBeVisible();
+    await expect(page.getByText('-82.0 dB', { exact: true })).toBeVisible();
     await micButton.click();
 
     // Button transitions to "Stop Mic" and live spectrogram badge is displayed
     await expect(page.locator('button:has-text("Stop Mic")')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('text=● Live Microphone')).toBeVisible({ timeout: 10000 });
+
+    // The audio worklet delivers chunks: the noise floor readout leaves its initial value once enough audio has been analysed.
+    await expect(page.getByText('-82.0 dB', { exact: true })).toBeHidden({ timeout: 10000 });
 
     // Stop mic
     await page.locator('button:has-text("Stop Mic")').click();

@@ -46,8 +46,17 @@ const appBuild = await build({
   splitting: true,
 });
 
-// The app build holds every file the page loads at runtime (entry, worker, shared chunks, stylesheet). The service worker is excluded: the browser fetches it outside the cache, and listing it here would pin an old copy.
-const bundleUrls = Object.keys(appBuild.metafile.outputs).map((output) => relative(outDir, join(repoRoot, output)));
+// The audio worklet module is a build of its own, without code splitting, so that it is one self-contained file: the page loads it through audioWorklet.addModule, outside the app's chunk graph.
+const workletBuild = await build({
+  ...common,
+  metafile: true,
+  entryPoints: {
+    'mic-capture.worklet': join(repoRoot, 'src/browser/mic-capture.worklet.ts'),
+  },
+});
+
+// The app and worklet builds hold every file the page loads at runtime (entry, workers, shared chunks, stylesheet). The service worker is excluded: the browser fetches it outside the cache, and listing it here would pin an old copy.
+const bundleUrls = [...Object.keys(appBuild.metafile.outputs), ...Object.keys(workletBuild.metafile.outputs)].map((output) => relative(outDir, join(repoRoot, output)));
 const precache = computePrecache(outDir, packageJson.version, [...SHELL_URLS, ...bundleUrls]);
 
 // The service worker is built last because it embeds the precache version: its bytes must change whenever any precached byte does, or browsers never see a new worker for a content-only release and installed copies keep their old files.
