@@ -1,8 +1,40 @@
 import type { QuietInterval } from '../schemas';
+import {
+  ANALYSIS_MAX_FREQ_HZ,
+  ANALYSIS_MIN_FREQ_HZ,
+  MISSING_BIN_POWER_DB,
+  SPECTROGRAM_FFT_SIZE,
+  SPECTROGRAM_HOP_SAMPLES,
+} from './constants';
 import { computeHannPowerSpectrumDb } from './fft';
 
 /**
- * Single Short-Time Fourier Transform (STFT) frame in the 30–600 Hz aircraft Doppler band.
+ * Default margin in dB by which a frame's median noise floor may exceed the reference floor before the frame is flagged as noise-polluted.
+ */
+const NOISE_POLLUTION_MARGIN_DB = 12;
+
+/**
+ * Default reference noise floor in dB against which a single isolated frame is judged for noise pollution when the caller supplies no baseline.
+ */
+const DEFAULT_BASELINE_NOISE_DB = -80;
+
+/**
+ * Overall median noise floor in dB reported for a spectrogram that holds no frames.
+ */
+const EMPTY_SPECTROGRAM_NOISE_DB = -90;
+
+/**
+ * Smallest absolute second difference in dB across a peak for which parabolic interpolation is attempted; a flatter peak keeps its integer bin.
+ */
+const MIN_PARABOLA_CURVATURE_DB = 1e-9;
+
+/**
+ * Largest sub-bin offset in bins that parabolic interpolation may apply to a peak: a true maximum lies within half a bin of the sampled one.
+ */
+const MAX_SUB_BIN_OFFSET = 0.5;
+
+/**
+ * Single Short-Time Fourier Transform (STFT) frame in the aircraft Doppler band (65 to 500 Hz by default).
  */
 export interface SpectrogramFrame {
   readonly timeSec: number;
@@ -77,12 +109,12 @@ function medianOfSlice(values: Readonly<Float64Array>, start: number, end: numbe
     }
   }
   if (slice.length === 0) {
-    return -120;
+    return MISSING_BIN_POWER_DB;
   }
   slice.sort((a, b) => a - b);
   const mid = slice.length >> 1;
 
-  return slice[mid] ?? -120;
+  return slice[mid] ?? MISSING_BIN_POWER_DB;
 }
 
 /**
@@ -96,12 +128,12 @@ export function computeSingleSpectrogramFrame(
   options: Readonly<SingleFrameOptions>,
 ): ComputedSingleFrame {
   const sampleRateHz = options.sampleRateHz;
-  const fftSize = options.fftSize ?? 2048;
-  const minFreqHz = options.minFreqHz ?? 65;
-  const maxFreqHz = options.maxFreqHz ?? 500;
+  const fftSize = options.fftSize ?? SPECTROGRAM_FFT_SIZE;
+  const minFreqHz = options.minFreqHz ?? ANALYSIS_MIN_FREQ_HZ;
+  const maxFreqHz = options.maxFreqHz ?? ANALYSIS_MAX_FREQ_HZ;
   const timeSec = options.timeSec ?? 0;
-  const pollutionMarginDb = options.noisePollutionThresholdDb ?? 12;
-  const baselineNoiseDb = options.baselineNoiseDb ?? -80;
+  const pollutionMarginDb = options.noisePollutionThresholdDb ?? NOISE_POLLUTION_MARGIN_DB;
+  const baselineNoiseDb = options.baselineNoiseDb ?? DEFAULT_BASELINE_NOISE_DB;
 
   const binStepHz = sampleRateHz / fftSize;
   const minBin = Math.max(1, Math.floor(minFreqHz / binStepHz));
@@ -124,7 +156,9 @@ export function computeSingleSpectrogramFrame(
   const leftDb = fullSpectrumDb[bestBin - 1] ?? bestPowerDb;
   const rightDb = fullSpectrumDb[bestBin + 1] ?? bestPowerDb;
   const denom = leftDb - 2 * bestPowerDb + rightDb;
-  const deltaBin = Math.abs(denom) > 1e-9 ? Math.max(-0.5, Math.min(0.5, (0.5 * (leftDb - rightDb)) / denom)) : 0;
+  const deltaBin = Math.abs(denom) > MIN_PARABOLA_CURVATURE_DB
+      ? Math.max(-MAX_SUB_BIN_OFFSET, Math.min(MAX_SUB_BIN_OFFSET, ((leftDb - rightDb) / 2) / denom))
+      : 0;
   const peakFreqHz = (bestBin + deltaBin) * binStepHz;
   const peakSnrDb = bestPowerDb - medianNoiseFloorDb;
   const bandPowerDb = fullSpectrumDb.slice(minBin, maxBin + 1);
@@ -144,7 +178,7 @@ export function computeSingleSpectrogramFrame(
 }
 
 /**
- * Computes a high-resolution spectrogram focused on the 30–600 Hz aircraft acoustic Doppler band, with parabolic sub-bin peak interpolation and continuous noise-pollution gating.
+ * Computes a high-resolution spectrogram focused on the aircraft acoustic Doppler band (65 to 500 Hz by default), with parabolic sub-bin peak interpolation and continuous noise-pollution gating.
  * @param samples - Decimated mono audio samples (typically at 2,000 Hz).
  * @param options - Spectrogram configuration parameters.
  * @returns Spectrogram frames, sub-bin peak tracks, and quiet intervals where silence filtering is valid.
@@ -155,11 +189,11 @@ export function computeDopplerSpectrogram(
 ): DopplerSpectrogram {
   const sampleRateHz = options.sampleRateHz;
   const startTimeSec = options.startTimeSec ?? 0;
-  const fftSize = options.fftSize ?? 2048;
-  const hopSamples = options.hopSamples ?? 500;
-  const minFreqHz = options.minFreqHz ?? 65;
-  const maxFreqHz = options.maxFreqHz ?? 500;
-  const pollutionMarginDb = options.noisePollutionThresholdDb ?? 12;
+  const fftSize = options.fftSize ?? SPECTROGRAM_FFT_SIZE;
+  const hopSamples = options.hopSamples ?? SPECTROGRAM_HOP_SAMPLES;
+  const minFreqHz = options.minFreqHz ?? ANALYSIS_MIN_FREQ_HZ;
+  const maxFreqHz = options.maxFreqHz ?? ANALYSIS_MAX_FREQ_HZ;
+  const pollutionMarginDb = options.noisePollutionThresholdDb ?? NOISE_POLLUTION_MARGIN_DB;
 
   if (!(sampleRateHz > 0)) {
     throw new Error(`Sample rate must be positive, got ${String(sampleRateHz)} Hz`);
@@ -188,7 +222,7 @@ export function computeDopplerSpectrogram(
   }
 
   const floorList = rawFrames.map((f) => f.medianNoiseFloorDb).sort((a, b) => a - b);
-  const overallMedianNoiseDb = floorList.length > 0 ? (floorList[floorList.length >> 1] ?? -90) : -90;
+  const overallMedianNoiseDb = floorList.length > 0 ? (floorList[floorList.length >> 1] ?? EMPTY_SPECTROGRAM_NOISE_DB) : EMPTY_SPECTROGRAM_NOISE_DB;
   const frameDurationSec = hopSamples / sampleRateHz;
 
   const frames: SpectrogramFrame[] = rawFrames.map((f) => ({
@@ -208,13 +242,13 @@ export function computeDopplerSpectrogram(
 
   for (const frame of frames) {
     if (!frame.noisePolluted) {
-      currentStart ??= frame.timeSec - 0.5 * frameDurationSec;
+      currentStart ??= frame.timeSec - frameDurationSec / 2;
       noiseAccum.push(frame.medianNoiseFloorDb);
     } else if (currentStart !== null) {
       const sortedNoise = [...noiseAccum].sort((a, b) => a - b);
       quietIntervals.push({
         startSec: currentStart,
-        endSec: frame.timeSec - 0.5 * frameDurationSec,
+        endSec: frame.timeSec - frameDurationSec / 2,
         medianNoiseFloorDb: sortedNoise[sortedNoise.length >> 1] ?? overallMedianNoiseDb,
       });
       currentStart = null;
@@ -228,7 +262,7 @@ export function computeDopplerSpectrogram(
     if (lastFrame !== undefined) {
       quietIntervals.push({
         startSec: currentStart,
-        endSec: lastFrame.timeSec + 0.5 * frameDurationSec,
+        endSec: lastFrame.timeSec + frameDurationSec / 2,
         medianNoiseFloorDb: sortedNoise[sortedNoise.length >> 1] ?? overallMedianNoiseDb,
       });
     }
