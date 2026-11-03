@@ -1,5 +1,5 @@
 {
-  "name": "doppler",
+  "name": "@mearman/doppler",
   "description": "Offline and real-time aircraft Doppler audio geolocation library, CLI, and PWA",
   "version": "0.1.0",
   "bin": {
