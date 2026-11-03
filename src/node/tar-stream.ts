@@ -13,68 +13,146 @@ const SIZE_FIELD: TarField = { offset: 124, length: 12 };
 const TYPE_FIELD_OFFSET = 156;
 const PREFIX_FIELD: TarField = { offset: 345, length: 155 };
 
+/** Tar writes sizes as octal text. */
+const OCTAL_RADIX = 8;
+
 /** A regular file read from a tar stream. */
 export interface TarFile {
   readonly name: string;
   readonly data: Buffer;
 }
 
+/** What a tar parser is waiting for. A `skip` carries the file whose data just completed, which is released once its block padding has been consumed. */
+type State =
+  | { readonly kind: 'header' }
+  | { readonly kind: 'longName'; readonly padding: number }
+  | { readonly kind: 'data'; readonly name: string; readonly padding: number }
+  | { readonly kind: 'skip'; readonly file?: TarFile };
+
+/** Words for the parser state in a truncation error. */
+const STATE_LABELS: Readonly<Record<State['kind'], string>> = { header: 'header', longName: 'long name', data: 'entry', skip: 'entry' };
+
 /**
- * Pulls exact byte counts from an async chunk source without holding more than the current chunk and the requested length.
+ * A push-driven tar parser: it is fed chunks as they arrive and holds only the bytes of the current header or entry plus the unconsumed remainder of the current chunk.
+ * It is a synchronous state machine, so the only suspension point of a reader is the `for await` over the source.
  */
-class ChunkReader {
-  private readonly iterator: AsyncIterator<Uint8Array>;
+class TarParser {
+  private state: State = { kind: 'header' };
 
-  private current: Buffer = Buffer.alloc(0);
+  /** Bytes still needed to finish the current state. */
+  private need = TAR_BLOCK_BYTES;
 
-  constructor(source: Readonly<AsyncIterable<Uint8Array>>) {
-    this.iterator = source[Symbol.asyncIterator]();
+  /** Bytes the current state asked for in total, for the truncation error. */
+  private total = TAR_BLOCK_BYTES;
+
+  /** Collected bytes of the current header, long name or file; skipped bytes are not kept. */
+  private collected: Buffer[] = [];
+
+  private longName: string | undefined;
+
+  private ended = false;
+
+  constructor(private readonly wanted: (name: string) => boolean) {}
+
+  /** True once an end-of-archive block has been read: later bytes are ignored. */
+  get isEnded(): boolean {
+    return this.ended;
   }
 
-  private async refill(): Promise<boolean> {
-    const next = await this.iterator.next();
-    if (next.done === true) {
-      return false;
-    }
-    this.current = Buffer.from(next.value.buffer, next.value.byteOffset, next.value.byteLength);
-
-    return true;
+  private begin(state: State, length: number): void {
+    this.state = state;
+    this.need = length;
+    this.total = length;
+    this.collected = [];
   }
 
   /**
-   * Reads exactly `length` bytes.
-   * @returns The bytes, or `undefined` when the stream ended on a boundary before the first byte.
-   * @throws When the stream ends part-way through the requested bytes.
+   * Feeds one chunk of the stream.
+   * @param chunk - The next bytes of the tar stream.
+   * @returns The files completed by these bytes.
+   * @throws When a header has a size that is not an octal number.
    */
-  async read(length: number): Promise<Buffer | undefined> {
-    const parts: Buffer[] = [];
-    let remaining = length;
-    while (remaining > 0) {
-      if (this.current.length === 0 && !(await this.refill())) {
-        if (remaining === length) {
-          return undefined;
-        }
-        throw new Error(`Tar stream ended ${String(remaining)} bytes short of a ${String(length)}-byte read`);
+  *push(chunk: Readonly<Buffer>): Generator<TarFile> {
+    let rest = chunk;
+    while (!this.ended) {
+      if (this.need === 0) {
+        yield* this.complete();
+        continue;
       }
-      const taken = this.current.subarray(0, remaining);
-      parts.push(taken);
-      this.current = this.current.subarray(taken.length);
-      remaining -= taken.length;
+      if (rest.length === 0) {
+        return;
+      }
+      const taken = rest.subarray(0, this.need);
+      if (this.state.kind !== 'skip') {
+        this.collected.push(taken);
+      }
+      this.need -= taken.length;
+      rest = rest.subarray(taken.length);
     }
-
-    return Buffer.concat(parts);
   }
 
-  /** Discards `length` bytes without buffering them. */
-  async skip(length: number): Promise<void> {
-    let remaining = length;
-    while (remaining > 0) {
-      if (this.current.length === 0 && !(await this.refill())) {
-        throw new Error(`Tar stream ended ${String(remaining)} bytes short of a ${String(length)}-byte entry`);
-      }
-      const taken = Math.min(remaining, this.current.length);
-      this.current = this.current.subarray(taken);
-      remaining -= taken;
+  /**
+   * Checks that the stream ended on an entry boundary.
+   * @throws When the stream ended inside a header, a long name or an entry.
+   */
+  finish(): void {
+    const onBoundary = this.state.kind === 'header' && this.need === this.total;
+    if (!this.ended && !onBoundary) {
+      throw new Error(`Tar stream ended ${String(this.need)} bytes short of a ${String(this.total)}-byte ${STATE_LABELS[this.state.kind]}`);
+    }
+  }
+
+  private *complete(): Generator<TarFile> {
+    const state = this.state;
+    const bytes = Buffer.concat(this.collected);
+    switch (state.kind) {
+      case 'header':
+        this.readHeader(bytes);
+        break;
+      case 'longName':
+        this.longName = field(bytes, { offset: 0, length: bytes.length });
+        this.begin({ kind: 'skip' }, state.padding);
+        break;
+      case 'data':
+        this.begin({ kind: 'skip', file: { name: state.name, data: bytes } }, state.padding);
+        break;
+      case 'skip':
+        this.begin({ kind: 'header' }, TAR_BLOCK_BYTES);
+        if (state.file !== undefined) {
+          yield state.file;
+        }
+        break;
+    }
+  }
+
+  private readHeader(header: Readonly<Buffer>): void {
+    // The end of an archive is two zero blocks, or just the end of the stream.
+    if (header.every((byte) => byte === 0)) {
+      this.ended = true;
+
+      return;
+    }
+    const size = Number.parseInt(field(header, SIZE_FIELD).trim() || '0', OCTAL_RADIX);
+    if (!Number.isFinite(size)) {
+      throw new Error('Tar header has a size that is not an octal number');
+    }
+    const padding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES;
+    const type = String.fromCharCode(header[TYPE_FIELD_OFFSET] ?? 0);
+
+    if (type === 'L') {
+      this.begin({ kind: 'longName', padding }, size);
+
+      return;
+    }
+    const prefix = field(header, PREFIX_FIELD);
+    const name = this.longName ?? (prefix === '' ? field(header, NAME_FIELD) : `${prefix}/${field(header, NAME_FIELD)}`);
+    this.longName = undefined;
+
+    const isFile = type === '0' || type === '\0';
+    if (isFile && this.wanted(name)) {
+      this.begin({ kind: 'data', name, padding }, size);
+    } else {
+      this.begin({ kind: 'skip' }, size + padding);
     }
   }
 }
@@ -95,40 +173,12 @@ function field(header: Readonly<Buffer>, spec: Readonly<TarField>): string {
  * @throws When the stream ends inside a header or an entry.
  */
 export async function* readTarFiles(source: Readonly<AsyncIterable<Uint8Array>>, wanted: (name: string) => boolean): AsyncGenerator<TarFile> {
-  const reader = new ChunkReader(source);
-  let longName: string | undefined;
-  for (;;) {
-    const header = await reader.read(TAR_BLOCK_BYTES);
-    // The end of an archive is two zero blocks, or just the end of the stream.
-    if (header === undefined || header.every((byte) => byte === 0)) {
+  const parser = new TarParser(wanted);
+  for await (const chunk of source) {
+    yield* parser.push(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+    if (parser.isEnded) {
       return;
     }
-    const size = Number.parseInt(field(header, SIZE_FIELD).trim() || '0', 8);
-    if (!Number.isFinite(size)) {
-      throw new Error('Tar header has a size that is not an octal number');
-    }
-    const padding = (TAR_BLOCK_BYTES - (size % TAR_BLOCK_BYTES)) % TAR_BLOCK_BYTES;
-    const type = String.fromCharCode(header[TYPE_FIELD_OFFSET] ?? 0);
-
-    if (type === 'L') {
-      longName = field((await reader.read(size)) ?? Buffer.alloc(0), { offset: 0, length: size });
-      await reader.skip(padding);
-      continue;
-    }
-    const prefix = field(header, PREFIX_FIELD);
-    const name = longName ?? (prefix === '' ? field(header, NAME_FIELD) : `${prefix}/${field(header, NAME_FIELD)}`);
-    longName = undefined;
-
-    const isFile = type === '0' || type === '\0';
-    if (isFile && wanted(name)) {
-      const data = size === 0 ? Buffer.alloc(0) : await reader.read(size);
-      if (data === undefined) {
-        throw new Error(`Tar stream ended before the data of ${name}`);
-      }
-      await reader.skip(padding);
-      yield { name, data };
-    } else {
-      await reader.skip(size + padding);
-    }
   }
+  parser.finish();
 }
