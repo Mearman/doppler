@@ -237,8 +237,9 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
   describe('saveDatasetBundle batching', () => {
     it('round-trips more segments than one write batch holds', () => {
       const template = BUNDLED_SEGMENTS[0]!;
-      // More than one batch of 5000, so the batch boundary is crossed twice.
-      const segments = Array.from({ length: 12001 }, (_, index) => ({ ...template, id: `batch_${String(index)}`, flightId: `F${String(index)}` }));
+      /* More than one batch of 5000, so the batch boundary is crossed twice.
+         Each segment sits in its own spatial cell so the constellation index, which pairs segments within a cell, stays linear in this test. */
+      const segments = Array.from({ length: 12001 }, (_, index) => ({ ...template, id: `batch_${String(index)}`, flightId: `F${String(index)}`, h3Cell: `h3r6_${String(index)}_${String(index)}` }));
       const filePath = join(tempDir, 'batched.json');
 
       saveDatasetBundle(filePath, segments.slice(0, 12001), []);
