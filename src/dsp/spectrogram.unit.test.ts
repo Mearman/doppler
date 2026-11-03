@@ -43,4 +43,12 @@ describe('Spectrogram and Ridge Tracking', () => {
     expect(obs.cpaTimeSec).toBeGreaterThan(60);
     expect(obs.cpaTimeSec).toBeLessThan(120);
   });
+
+  it('rejects a hop that would never advance and a non-positive sample rate', () => {
+    const audio = new Float32Array(4096);
+
+    expect(() => computeDopplerSpectrogram(audio, { sampleRateHz: 2000, hopSamples: 0 })).toThrow('hopSamples');
+    expect(() => computeDopplerSpectrogram(audio, { sampleRateHz: 2000, hopSamples: 2.5 })).toThrow('hopSamples');
+    expect(() => computeDopplerSpectrogram(audio, { sampleRateHz: 0 })).toThrow('Sample rate');
+  });
 });
