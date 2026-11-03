@@ -1,5 +1,6 @@
-import path from 'node:path';
 import { expect, test } from '@playwright/test';
+import { generateBundledReferenceAudio } from '../../src/bundled';
+import { encodeWavPcm16 } from '../../src/dsp/side-channels';
 
 test.describe('Doppler PWA Offline Geolocation', () => {
   test('renders header, tabs, and Leaflet map', async ({ page }) => {
@@ -48,20 +49,21 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     await expect(page.locator('button:has-text("Start Mic")')).toBeVisible({ timeout: 10000 });
   });
 
-  test('processes audio clip from colsto youtube challenge via File Analyzer', async ({ page }) => {
+  test('analyses an uploaded WAV file in the File Analyzer', async ({ page }) => {
     await page.goto('/');
 
     // Switch to File Analyzer tab
     await page.click('button[role="tab"]:has-text("File Analyzer")');
     await expect(page.locator('text=Upload Audio / Video')).toBeVisible();
 
-    // Upload colsto flyover audio snippet
-    const filePath = path.resolve(import.meta.dirname, '../../fixtures/colsto-flyover-36m.wav');
+    // The recording is synthesised so the test needs no fixture file, which are gitignored and absent in CI.
+    const sampleRateHz = 2000;
+    const wav = encodeWavPcm16(generateBundledReferenceAudio(sampleRateHz), sampleRateHz);
     const fileInput = page.locator('input[type="file"]');
-    await fileInput.setInputFiles(filePath);
+    await fileInput.setInputFiles({ name: 'synthetic-flyovers.wav', mimeType: 'audio/wav', buffer: Buffer.from(wav) });
 
     // Verify file analysis status
-    await expect(page.locator('text=Analyzing colsto-flyover-36m.wav')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=Analyzing synthetic-flyovers.wav')).toBeVisible({ timeout: 10000 });
 
     // Verify spectrogram updates to Audio Clip Analysis and renders detected flyover tracks
     await expect(page.locator('text=Audio Clip Analysis')).toBeVisible({ timeout: 15000 });
