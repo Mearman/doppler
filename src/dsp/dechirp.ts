@@ -1,6 +1,27 @@
 import { geoToLocalEnu } from '../physics/geo';
 import type { GeoPoint3D, LinearFlightSegment } from '../schemas';
+import { NO_BACKGROUND_NOISE_FLOOR_DB, SPEED_OF_SOUND_MPS } from './constants';
 import { computeHannPowerSpectrumDb } from './fft';
+
+/**
+ * Length in samples of the emission-time grid that the audio is resampled onto and transformed. At the analysis rate it spans 2.048 s, twice the default spectrogram window, so that the collapsed stationary tone integrates over more cycles.
+ */
+const DECHIRP_FFT_SIZE = 4096;
+
+/**
+ * Shortest flight-segment duration in seconds used as a divisor when deriving the segment's velocity, so that a degenerate zero-length segment cannot divide by zero.
+ */
+const MIN_SEGMENT_DURATION_SEC = 1e-3;
+
+/**
+ * Half-width in Hz of the band around the expected base frequency in which the stationary peak is searched for, and from which the background level is taken.
+ */
+const PEAK_SEARCH_HALF_WIDTH_HZ = 15;
+
+/**
+ * Number of bins either side of the peak that are excluded from the background estimate because the peak's main lobe spreads into them.
+ */
+const PEAK_EXCLUSION_BINS = 3;
 
 /**
  * Result of 1D emission-time de-chirping matched-filter evaluation.
@@ -35,10 +56,9 @@ export function scoreByEmissionDechirping(
   samples: Readonly<Float32Array>,
   options: Readonly<DechirpOptions>,
 ): DechirpScoreResult {
-  const { sampleRateHz, bufferStartEpochSec, observer, segment, expectedBaseFreqHz, soundSpeedMps = 343.0 } = options;
-  const fftSize = 4096;
-  const resampled = new Float32Array(fftSize);
-  const segDuration = Math.max(1e-3, segment.endEpochSec - segment.startEpochSec);
+  const { sampleRateHz, bufferStartEpochSec, observer, segment, expectedBaseFreqHz, soundSpeedMps = SPEED_OF_SOUND_MPS } = options;
+  const resampled = new Float32Array(DECHIRP_FFT_SIZE);
+  const segDuration = Math.max(MIN_SEGMENT_DURATION_SEC, segment.endEpochSec - segment.startEpochSec);
   const startEnu = geoToLocalEnu(observer, segment.startGeo);
   const endEnu = geoToLocalEnu(observer, segment.endGeo);
 
@@ -47,13 +67,13 @@ export function scoreByEmissionDechirping(
   const vz = (endEnu.z - startEnu.z) / segDuration;
 
   const bufferDurationSec = samples.length / sampleRateHz;
-  const midObsEpochSec = bufferStartEpochSec + 0.5 * bufferDurationSec;
+  const midObsEpochSec = bufferStartEpochSec + bufferDurationSec / 2;
   const approxDelaySec = Math.hypot(startEnu.x, startEnu.y, startEnu.z) / soundSpeedMps;
   const centerEmitEpochSec = midObsEpochSec - approxDelaySec;
-  const windowDurationSec = fftSize / sampleRateHz;
-  const emitStartEpochSec = centerEmitEpochSec - 0.5 * windowDurationSec;
+  const windowDurationSec = DECHIRP_FFT_SIZE / sampleRateHz;
+  const emitStartEpochSec = centerEmitEpochSec - windowDurationSec / 2;
 
-  for (let i = 0; i < fftSize; i += 1) {
+  for (let i = 0; i < DECHIRP_FFT_SIZE; i += 1) {
     const emitEpochSec = emitStartEpochSec + i / sampleRateHz;
     const dtSeg = emitEpochSec - segment.startEpochSec;
     const rx = startEnu.x + vx * dtSeg;
@@ -73,10 +93,10 @@ export function scoreByEmissionDechirping(
     }
   }
 
-  const spectrumDb = computeHannPowerSpectrumDb(resampled, fftSize);
-  const binStepHz = sampleRateHz / fftSize;
-  const minSearchBin = Math.max(2, Math.floor((expectedBaseFreqHz - 15) / binStepHz));
-  const maxSearchBin = Math.min((fftSize >> 1) - 2, Math.ceil((expectedBaseFreqHz + 15) / binStepHz));
+  const spectrumDb = computeHannPowerSpectrumDb(resampled, DECHIRP_FFT_SIZE);
+  const binStepHz = sampleRateHz / DECHIRP_FFT_SIZE;
+  const minSearchBin = Math.max(2, Math.floor((expectedBaseFreqHz - PEAK_SEARCH_HALF_WIDTH_HZ) / binStepHz));
+  const maxSearchBin = Math.min((DECHIRP_FFT_SIZE >> 1) - 2, Math.ceil((expectedBaseFreqHz + PEAK_SEARCH_HALF_WIDTH_HZ) / binStepHz));
 
   let peakBin = minSearchBin;
   let peakDb = -Infinity;
@@ -91,7 +111,7 @@ export function scoreByEmissionDechirping(
   }
 
   for (let b = minSearchBin; b <= maxSearchBin; b += 1) {
-    if (Math.abs(b - peakBin) > 3) {
+    if (Math.abs(b - peakBin) > PEAK_EXCLUSION_BINS) {
       const val = spectrumDb[b];
       if (val !== undefined) {
         backgroundBins.push(val);
@@ -100,7 +120,7 @@ export function scoreByEmissionDechirping(
   }
 
   backgroundBins.sort((a, b) => a - b);
-  const noiseFloorDb = backgroundBins.length > 0 ? (backgroundBins[backgroundBins.length >> 1] ?? -100) : -100;
+  const noiseFloorDb = backgroundBins.length > 0 ? (backgroundBins[backgroundBins.length >> 1] ?? NO_BACKGROUND_NOISE_FLOOR_DB) : NO_BACKGROUND_NOISE_FLOOR_DB;
 
   return {
     coherentSnrDb: peakDb - noiseFloorDb,
