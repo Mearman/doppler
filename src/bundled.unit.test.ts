@@ -8,7 +8,7 @@ import {
   generateBundledReferenceAudio,
   generateBundledReferenceWavBytes,
 } from './bundled';
-import { decodeWavBytes } from './dsp/side-channels';
+import { decodeWavBytes } from './dsp/wav';
 import { DopplerDataset } from './schemas';
 
 describe('Bundled Reference Dataset and Audio Synthesis', () => {
