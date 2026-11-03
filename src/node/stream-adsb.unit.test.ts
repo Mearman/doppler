@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -8,6 +8,7 @@ import {
   classifyAircraftCategory,
   loadDatasetFile,
   processRawAdsbTrace,
+  readAdsbSegments,
   type RawAdsbTraceFile,
   saveDatasetBundle,
 } from './stream-adsb';
@@ -125,6 +126,76 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
       expect(firstSeg.category).toBe('piston');
       expect(firstSeg.dateIso).toBe('2026-09-08');
       expect(firstSeg.groundspeedMps).toBeGreaterThan(0);
+    });
+  });
+
+  describe('processRawAdsbTrace on real trace shapes', () => {
+    const base = 1788900000;
+    /** Twelve pings 10 s apart flying north-east at about 70 m/s and 3,000 ft. */
+    const leg = (startSec: number): RawAdsbTraceFile['trace'] =>
+      Array.from({ length: 12 }, (_, index) => [startSec + index * 10, 51.7 + index * 0.0045, -1.3 + index * 0.0045, 3000, 130, 45]);
+
+    it('does not bridge a landing: ground and missing altitudes end the run', () => {
+      const trace: RawAdsbTraceFile = {
+        icao: '4009a1',
+        t: 'C172',
+        trace: [...leg(0), [120, 51.75, -1.25, 'ground'], [130, 51.75, -1.25, null], ...leg(600)],
+      };
+      const segments = processRawAdsbTrace(trace, '2026-09-08', base);
+
+      expect(segments.length).toBeGreaterThanOrEqual(2);
+      expect(segments.every((segment) => Number.isFinite(segment.startGeo.altMeters) && Number.isFinite(segment.endGeo.altMeters))).toBe(true);
+      // No segment spans the 480 s between the two legs.
+      expect(segments.every((segment) => segment.endEpochSec - segment.startEpochSec < 200)).toBe(true);
+    });
+
+    it('splits at a gap in coverage instead of drawing a straight line across it', () => {
+      const trace: RawAdsbTraceFile = { icao: '4009a1', t: 'C172', trace: [...leg(0), ...leg(400)] };
+      const segments = processRawAdsbTrace(trace, '2026-09-08', base);
+
+      expect(segments.every((segment) => segment.endEpochSec - segment.startEpochSec < 200)).toBe(true);
+    });
+
+    it('gives every segment of one flight a distinct id', () => {
+      const trace: RawAdsbTraceFile = { icao: '4009a1', t: 'C172', trace: [...leg(0), ...leg(400)] };
+      const ids = processRawAdsbTrace(trace, '2026-09-08', base).map((segment) => segment.id);
+
+      expect(new Set(ids).size).toBe(ids.length);
+    });
+  });
+
+  describe('readAdsbSegments', () => {
+    it('reads a raw trace with a timestamp, deriving its date, and a directory of files', () => {
+      const dir = join(tempDir, 'traces');
+      mkdirSync(dir);
+      const points = Array.from({ length: 12 }, (_, index) => [index * 10, 51.7 + index * 0.0045, -1.3 + index * 0.0045, 3000]);
+      writeFileSync(join(dir, 'a.json'), JSON.stringify({ icao: 'aa0001', t: 'C172', timestamp: 1788825600, trace: points }));
+      writeFileSync(join(dir, 'b.json'), JSON.stringify([{ icao: 'bb0002', t: 'PA28', timestamp: 1788825600, trace: points }]));
+      writeFileSync(join(dir, 'ignored.txt'), 'not json');
+
+      const segments = readAdsbSegments(dir);
+
+      expect(new Set(segments.map((segment) => segment.icao24))).toEqual(new Set(['aa0001', 'bb0002']));
+      expect(segments[0]?.dateIso).toBe('2026-09-08');
+    });
+
+    it('asks for a date when a raw trace has no timestamp, and uses it when given', () => {
+      const file = join(tempDir, 'untimed.json');
+      const points = Array.from({ length: 12 }, (_, index) => [index * 10, 51.7 + index * 0.0045, -1.3 + index * 0.0045, 3000]);
+      writeFileSync(file, JSON.stringify({ icao: 'cc0003', t: 'C172', trace: points }));
+
+      expect(() => readAdsbSegments(file)).toThrow('has no timestamp');
+      expect(readAdsbSegments(file, { dateIso: '2026-09-08' })[0]?.dateIso).toBe('2026-09-08');
+    });
+
+    it('passes ready-made segments through and names a file that matches no shape', () => {
+      const ready = join(tempDir, 'ready.json');
+      writeFileSync(ready, JSON.stringify({ segments: BUNDLED_SEGMENTS }));
+      const bad = join(tempDir, 'bad.json');
+      writeFileSync(bad, JSON.stringify({ hello: 'world' }));
+
+      expect(readAdsbSegments(ready)).toHaveLength(BUNDLED_SEGMENTS.length);
+      expect(() => readAdsbSegments(bad)).toThrow('bad.json');
     });
   });
 

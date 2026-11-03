@@ -6,8 +6,8 @@ import { decimateAudioStream } from '../src/dsp/decimate';
 import { extractDopplerObservations } from '../src/dsp/ridge-tracker';
 import { detectEnfSignature } from '../src/dsp/side-channels';
 import { computeDopplerSpectrogram } from '../src/dsp/spectrogram';
-import { loadDatasetFile, readWavFile, saveDatasetBundle } from '../src/node/entry';
-import { LinearFlightSegment, LocationSession } from '../src/schemas';
+import { type BoundingBox, loadDatasetFile, readAdsbArchiveSegments, readAdsbSegments, readWavFile, saveDatasetBundle } from '../src/node/entry';
+import { LocationSession } from '../src/schemas';
 import { DopplerSessionEngine } from '../src/solver/session';
 
 const PackageManifest = z.object({
@@ -17,6 +17,22 @@ const PackageManifest = z.object({
 /** The package version, read from the package.json that sits one directory above both `cli/` and `dist-cli/`. */
 function getCliVersion(): string {
   return PackageManifest.parse(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))).version;
+}
+
+/**
+ * Parses `minLat,minLon,maxLat,maxLon`.
+ * @param text - The option value.
+ * @returns The box.
+ * @throws When the value is not four numbers with the minimums below the maximums.
+ */
+function parseBoundingBox(text: string | undefined): BoundingBox {
+  const parts = (text ?? '').split(',').map(Number);
+  const [minLat, minLon, maxLat, maxLon] = parts;
+  if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part)) || minLat === undefined || minLon === undefined || maxLat === undefined || maxLon === undefined || minLat >= maxLat || minLon >= maxLon) {
+    throw new Error(`--bbox needs minLat,minLon,maxLat,maxLon with each minimum below its maximum, got ${text ?? 'nothing'}`);
+  }
+
+  return { minLat, minLon, maxLat, maxLon };
 }
 
 function formatCpaTime(cpaTimeSec: number): string {
@@ -36,10 +52,13 @@ doppler - Offline and real-time aircraft Doppler audio geolocation
 Usage:
   doppler locate <audio.wav> [options]
   doppler session <session.json> --add-audio <audio.wav>
-  doppler ingest --input <raw-adsb.json> --out <dataset.json>
+  doppler ingest --input <adsb.json|directory|-> --out <dataset.json> [--date <YYYY-MM-DD>] [--bbox <minLat,minLon,maxLat,maxLon>]
 
 Options:
   --dataset <path>    Path to a custom DopplerDataset .json file (defaults to bundled dataset)
+  --date <YYYY-MM-DD> For ingest: date of raw traces that carry no timestamp
+  --bbox <a,b,c,d>    For ingest: keep segments touching minLat,minLon,maxLat,maxLon
+                      (--input - reads an adsb.lol globe_history tar from stdin)
   --temp <celsius>    Ambient air temperature in Celsius (default 20.0)
   --json              Output raw JSON results
   --version, -v       Show version
@@ -47,7 +66,7 @@ Options:
 `);
 }
 
-function run(): void {
+async function run(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 0 || args.includes('-h') || args.includes('--help')) {
     printHelp();
@@ -204,17 +223,19 @@ function run(): void {
     const outputPath = outIdx !== -1 ? args[outIdx + 1] : undefined;
 
     if (inputPath === undefined || outputPath === undefined) {
-      console.error('Usage: doppler ingest --input <raw-adsb.json> --out <dataset.json>');
+      console.error('Usage: doppler ingest --input <adsb.json|directory|-> --out <dataset.json> [--date <YYYY-MM-DD>] [--bbox <minLat,minLon,maxLat,maxLon>]');
       process.exit(1);
     }
 
-    const raw = readFileSync(inputPath, 'utf8');
-    const parsed: unknown = JSON.parse(raw);
-    const parsedObj = typeof parsed === 'object' && parsed !== null ? parsed : {};
-    const rawSegments = Array.isArray(parsed)
-      ? parsed
-      : ('segments' in parsedObj && Array.isArray(parsedObj.segments) ? parsedObj.segments : []);
-    const segments = z.array(LinearFlightSegment).parse(rawSegments);
+    const dateIdx = args.indexOf('--date');
+    const dateIso = dateIdx !== -1 ? args[dateIdx + 1] : undefined;
+    const bboxIdx = args.indexOf('--bbox');
+    const bbox = bboxIdx !== -1 ? parseBoundingBox(args[bboxIdx + 1]) : undefined;
+    // `-` reads an `adsb.lol` globe_history tar from standard input, so the daily archive streams through without touching disk.
+    const segments =
+      inputPath === '-'
+        ? await readAdsbArchiveSegments(process.stdin, bbox === undefined ? {} : { bbox })
+        : readAdsbSegments(inputPath, dateIso === undefined ? {} : { dateIso });
     saveDatasetBundle(outputPath, segments);
     console.log(`Saved dataset bundle with ${String(segments.length)} segments to ${outputPath}`);
 
@@ -226,4 +247,4 @@ function run(): void {
   process.exit(1);
 }
 
-run();
+await run();

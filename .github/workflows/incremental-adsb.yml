@@ -36,12 +36,16 @@ jobs:
 
       - name: Ingest and Compress Trajectories
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TARGET_DATE: ${{ inputs.target_date }}
         run: |
           set -euo pipefail
           DATE="${TARGET_DATE:-$(date -u -d 'yesterday' +%Y-%m-%d)}"
-          echo "Processing ADS-B trajectories for $DATE..."
-          # Streams in memory, simplifies to 4D-RDP, builds constellation index, emits YYYY-MM-DD.dataset.json
-          # Uploads artifact to HuggingFace Dataset repository via huggingface_hub or curl if HF_TOKEN is configured
-          echo "Daily ingestion completed for $DATE."
+          YEAR="${DATE%%-*}"
+          # adsb.lol publishes each UTC day as a release of adsblol/globe_history_YYYY, split into .tar.aa and .tar.ab parts that concatenate to one tar.
+          TAG="v${DATE//-/.}-planes-readsb-prod-0"
+          BASE="https://github.com/adsblol/globe_history_${YEAR}/releases/download/${TAG}/${TAG}.tar"
+          echo "Processing ADS-B trajectories for ${DATE}..."
+          # Streams through memory: drops jets and cruise altitudes, simplifies each run to 4D-RDP segments, builds the constellation index and writes the dataset.
+          curl --fail --silent --show-error --location "${BASE}.aa" "${BASE}.ab" \
+            | node dist-cli/doppler.mjs ingest --input - --out "${DATE}.dataset.json"
+          ls -l "${DATE}.dataset.json"

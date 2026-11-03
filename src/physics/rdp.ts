@@ -112,7 +112,8 @@ export function simplifyTrajectory4D(
     const midLon = 0.5 * (startPing.lon + endPing.lon);
 
     segments.push({
-      id: `${meta.flightId}_seg${String(k)}`,
+      // The start time makes the id unique across a flight's runs and legs, which restart their index at zero.
+      id: `${meta.flightId}_${String(Math.floor(startPing.epochSec))}`,
       flightId: meta.flightId,
       icao24: meta.icao24,
       typeCode: meta.typeCode,
