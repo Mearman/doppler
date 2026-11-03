@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BUNDLED_DEM_GRID, BUNDLED_SEGMENTS } from '../bundled';
 import { DopplerDatasetSchema } from '../schemas';
+import { flightLeg, LEG_ALTITUDE_FT, LEG_STEP_DEGREES, type Origin, ping } from './test-support/trace';
 import {
   classifyAircraftCategory,
   loadDatasetFile,
@@ -12,6 +13,63 @@ import {
   type RawAdsbTraceFile,
   saveDatasetBundle,
 } from './stream-adsb';
+
+/** Epoch seconds of 2026-09-08T00:00:00Z, the date that traces carrying their own `timestamp` are given. */
+const DAY_START_EPOCH_SEC = 1788825600;
+
+/** Epoch seconds, on 2026-09-08, from which traces without a `timestamp` count their sample offsets. */
+const TRACE_BASE_EPOCH_SEC = 1788900000;
+
+/** The region of the segment-compression tests, north-west of Oxford. */
+const LEG_ORIGIN: Origin = { lat: 51.7, lon: -1.3 };
+
+/** A point in central London. */
+const LONDON: Origin = { lat: 51.5, lon: -0.1 };
+
+/** Altitude of a sample above the 20,000 ft audibility ceiling, in feet. */
+const CRUISE_ALTITUDE_FT = 25000;
+
+/** Barometric altitude of a commercial jet in the discarded-jet test, in feet. */
+const JET_ALTITUDE_FT = 5000;
+
+/** Offset of a second leg that follows the first after a gap longer than the reader bridges, in seconds. */
+const LATER_LEG_START_SEC = 400;
+
+/** Offset of a second leg that starts soon after the first ends, within the reader's bridging gap, in seconds. */
+const ADJACENT_LEG_START_SEC = 130;
+
+/** Offset of a leg flown after the aircraft landed and took off again, in seconds. */
+const AFTER_LANDING_LEG_START_SEC = 600;
+
+/** Offsets of the two samples recorded on the ground and with no altitude between the legs of the landing test, in seconds. */
+const GROUND_PING_OFFSET_SEC = 120;
+const NO_ALTITUDE_PING_OFFSET_SEC = 130;
+
+/** Position of the landing in the landing test. */
+const LANDING_POSITION: Origin = { lat: 51.75, lon: -1.25 };
+
+/** Upper bound on the duration of any segment when a gap or landing must split the trace: below the shortest gap between legs, in seconds. */
+const MAX_SPLIT_SEGMENT_SEC = 200;
+
+/** Ping index at which the bounding box of the region test begins and ends, so that it covers the second half of the first leg. */
+const BOX_FIRST_PING = 6;
+const BOX_LAST_PING = 11;
+
+/** Margin added after the last boxed sample, in degrees. */
+const BOX_MARGIN_DEGREES = 0.001;
+
+/** Samples, interval, step and wobble of the tolerance test's winding trace. */
+const WOBBLE_PINGS = 200;
+const WOBBLE_INTERVAL_SEC = 2;
+const WOBBLE_LAT_STEP_DEGREES = 0.0009;
+const WOBBLE_LON_AMPLITUDE_DEGREES = 0.0004;
+const WOBBLE_PINGS_PER_RADIAN = 3;
+const WOBBLE_GROUND_SPEED_KT = 130;
+const WOBBLE_TRACK_DEG = 45;
+
+/** Compression tolerances of the tolerance test, in metres. */
+const TIGHT_TOLERANCE_M = 2;
+const LOOSE_TOLERANCE_M = 60;
 
 describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () => {
   let tempDir: string;
@@ -73,12 +131,9 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
       const jetTrace: RawAdsbTraceFile = {
         icao: 'a00001',
         t: 'B738',
-        trace: [
-          [0, 51.5, -0.1, 5000],
-          [10, 51.51, -0.11, 5100],
-        ],
+        trace: [ping({ offsetSec: 0, ...LONDON, altitudeFt: JET_ALTITUDE_FT }), ping({ offsetSec: 10, lat: 51.51, lon: -0.11, altitudeFt: 5100 })],
       };
-      const result = processRawAdsbTrace(jetTrace, '2026-09-08', 1788900000);
+      const result = processRawAdsbTrace(jetTrace, '2026-09-08', TRACE_BASE_EPOCH_SEC);
       expect(result).toEqual([]);
     });
 
@@ -86,9 +141,9 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
       const singlePingTrace: RawAdsbTraceFile = {
         icao: '4009a1',
         t: 'C172',
-        trace: [[0, 51.5, -0.1, 3000]],
+        trace: [ping({ offsetSec: 0, ...LONDON, altitudeFt: LEG_ALTITUDE_FT })],
       };
-      const result = processRawAdsbTrace(singlePingTrace, '2026-09-08', 1788900000);
+      const result = processRawAdsbTrace(singlePingTrace, '2026-09-08', TRACE_BASE_EPOCH_SEC);
       expect(result).toEqual([]);
     });
 
@@ -96,12 +151,9 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
       const highAltTrace: RawAdsbTraceFile = {
         icao: '4009a1',
         t: 'C172',
-        trace: [
-          [0, 51.5, -0.1, 25000],
-          [10, 51.51, -0.11, 25000],
-        ],
+        trace: [ping({ offsetSec: 0, ...LONDON, altitudeFt: CRUISE_ALTITUDE_FT }), ping({ offsetSec: 10, lat: 51.51, lon: -0.11, altitudeFt: CRUISE_ALTITUDE_FT })],
       };
-      const result = processRawAdsbTrace(highAltTrace, '2026-09-08', 1788900000);
+      const result = processRawAdsbTrace(highAltTrace, '2026-09-08', TRACE_BASE_EPOCH_SEC);
       expect(result).toEqual([]);
     });
 
@@ -111,16 +163,19 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
         r: 'G-BOAC',
         t: 'C172',
         trace: [
-          [0, 51.7, -1.3, 3000],
-          [30, 51.72, -1.28, 3050],
-          [60, 51.74, -1.26, 3100],
-          [90, 51.76, -1.24, 3150],
+          ping({ offsetSec: 0, ...LEG_ORIGIN, altitudeFt: LEG_ALTITUDE_FT }),
+          ping({ offsetSec: 30, lat: 51.72, lon: -1.28, altitudeFt: 3050 }),
+          ping({ offsetSec: 60, lat: 51.74, lon: -1.26, altitudeFt: 3100 }),
+          ping({ offsetSec: 90, lat: 51.76, lon: -1.24, altitudeFt: 3150 }),
         ],
       };
-      const segments = processRawAdsbTrace(validTrace, '2026-09-08', 1788900000);
+      const segments = processRawAdsbTrace(validTrace, '2026-09-08', TRACE_BASE_EPOCH_SEC);
       expect(segments.length).toBeGreaterThanOrEqual(1);
 
-      const firstSeg = segments[0]!;
+      const firstSeg = segments[0];
+      if (firstSeg === undefined) {
+        throw new Error('the valid trace produced no segment');
+      }
       expect(firstSeg.icao24).toBe('4009a1');
       expect(firstSeg.flightId).toBe('G-BOAC');
       expect(firstSeg.category).toBe('piston');
@@ -130,38 +185,45 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
   });
 
   describe('processRawAdsbTrace on real trace shapes', () => {
-    const base = 1788900000;
-    /** Twelve pings 10 s apart flying north-east at about 70 m/s and 3,000 ft. */
-    const leg = (startSec: number): RawAdsbTraceFile['trace'] =>
-      Array.from({ length: 12 }, (_, index) => [startSec + index * 10, 51.7 + index * 0.0045, -1.3 + index * 0.0045, 3000, 130, 45]);
+    const leg = (startSec: number): RawAdsbTraceFile['trace'] => flightLeg(startSec, LEG_ORIGIN);
 
     it('does not bridge a landing: ground and missing altitudes end the run', () => {
       const trace: RawAdsbTraceFile = {
         icao: '4009a1',
         t: 'C172',
-        trace: [...leg(0), [120, 51.75, -1.25, 'ground'], [130, 51.75, -1.25, null], ...leg(600)],
+        trace: [
+          ...leg(0),
+          ping({ offsetSec: GROUND_PING_OFFSET_SEC, ...LANDING_POSITION, altitudeFt: 'ground' }),
+          ping({ offsetSec: NO_ALTITUDE_PING_OFFSET_SEC, ...LANDING_POSITION, altitudeFt: null }),
+          ...leg(AFTER_LANDING_LEG_START_SEC),
+        ],
       };
-      const segments = processRawAdsbTrace(trace, '2026-09-08', base);
+      const segments = processRawAdsbTrace(trace, '2026-09-08', TRACE_BASE_EPOCH_SEC);
 
       expect(segments.length).toBeGreaterThanOrEqual(2);
       expect(segments.every((segment) => Number.isFinite(segment.startGeo.altMeters) && Number.isFinite(segment.endGeo.altMeters))).toBe(true);
-      // No segment spans the 480 s between the two legs.
-      expect(segments.every((segment) => segment.endEpochSec - segment.startEpochSec < 200)).toBe(true);
+      // No segment spans the gap between the two legs.
+      expect(segments.every((segment) => segment.endEpochSec - segment.startEpochSec < MAX_SPLIT_SEGMENT_SEC)).toBe(true);
     });
 
     it('splits at a gap in coverage instead of drawing a straight line across it', () => {
-      const trace: RawAdsbTraceFile = { icao: '4009a1', t: 'C172', trace: [...leg(0), ...leg(400)] };
-      const segments = processRawAdsbTrace(trace, '2026-09-08', base);
+      const trace: RawAdsbTraceFile = { icao: '4009a1', t: 'C172', trace: [...leg(0), ...leg(LATER_LEG_START_SEC)] };
+      const segments = processRawAdsbTrace(trace, '2026-09-08', TRACE_BASE_EPOCH_SEC);
 
-      expect(segments.every((segment) => segment.endEpochSec - segment.startEpochSec < 200)).toBe(true);
+      expect(segments.every((segment) => segment.endEpochSec - segment.startEpochSec < MAX_SPLIT_SEGMENT_SEC)).toBe(true);
     });
 
     it('drops pings outside a region and does not bridge a flight that leaves and returns', () => {
-      const trace: RawAdsbTraceFile = { icao: '4009a1', t: 'C172', trace: [...leg(0), ...leg(130)] };
-      const everything = processRawAdsbTrace(trace, '2026-09-08', base);
+      const trace: RawAdsbTraceFile = { icao: '4009a1', t: 'C172', trace: [...leg(0), ...leg(ADJACENT_LEG_START_SEC)] };
+      const everything = processRawAdsbTrace(trace, '2026-09-08', TRACE_BASE_EPOCH_SEC);
       // The box covers only the second half of the first leg and nothing of the second.
-      const bbox = { minLat: 51.7 + 6 * 0.0045, minLon: -2, maxLat: 51.7 + 11 * 0.0045 + 0.001, maxLon: -1 };
-      const inside = processRawAdsbTrace(trace, '2026-09-08', base, { bbox });
+      const bbox = {
+        minLat: LEG_ORIGIN.lat + BOX_FIRST_PING * LEG_STEP_DEGREES,
+        minLon: -2,
+        maxLat: LEG_ORIGIN.lat + BOX_LAST_PING * LEG_STEP_DEGREES + BOX_MARGIN_DEGREES,
+        maxLon: -1,
+      };
+      const inside = processRawAdsbTrace(trace, '2026-09-08', TRACE_BASE_EPOCH_SEC, { bbox });
 
       expect(inside.length).toBeGreaterThan(0);
       expect(inside.length).toBeLessThan(everything.length + 1);
@@ -169,9 +231,17 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
     });
 
     it('compresses more at a looser tolerance', () => {
-      const wobble: RawAdsbTraceFile['trace'] = Array.from({ length: 200 }, (_, index) => [index * 2, 51.7 + index * 0.0009, -1.3 + Math.sin(index / 3) * 0.0004, 3000, 130, 45]);
-      const tight = processRawAdsbTrace({ icao: '4009a1', t: 'C172', trace: wobble }, '2026-09-08', base, { toleranceMeters: 2 });
-      const loose = processRawAdsbTrace({ icao: '4009a1', t: 'C172', trace: wobble }, '2026-09-08', base, { toleranceMeters: 60 });
+      const wobble: RawAdsbTraceFile['trace'] = Array.from({ length: WOBBLE_PINGS }, (_, index) =>
+        ping({
+          offsetSec: index * WOBBLE_INTERVAL_SEC,
+          lat: LEG_ORIGIN.lat + index * WOBBLE_LAT_STEP_DEGREES,
+          lon: LEG_ORIGIN.lon + Math.sin(index / WOBBLE_PINGS_PER_RADIAN) * WOBBLE_LON_AMPLITUDE_DEGREES,
+          altitudeFt: LEG_ALTITUDE_FT,
+          motion: { groundSpeedKt: WOBBLE_GROUND_SPEED_KT, trackDeg: WOBBLE_TRACK_DEG },
+        }),
+      );
+      const tight = processRawAdsbTrace({ icao: '4009a1', t: 'C172', trace: wobble }, '2026-09-08', TRACE_BASE_EPOCH_SEC, { toleranceMeters: TIGHT_TOLERANCE_M });
+      const loose = processRawAdsbTrace({ icao: '4009a1', t: 'C172', trace: wobble }, '2026-09-08', TRACE_BASE_EPOCH_SEC, { toleranceMeters: LOOSE_TOLERANCE_M });
 
       expect(loose.length).toBeLessThan(tight.length);
     });
@@ -192,8 +262,8 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
     });
 
     it('gives every segment of one flight a distinct id', () => {
-      const trace: RawAdsbTraceFile = { icao: '4009a1', t: 'C172', trace: [...leg(0), ...leg(400)] };
-      const ids = processRawAdsbTrace(trace, '2026-09-08', base).map((segment) => segment.id);
+      const trace: RawAdsbTraceFile = { icao: '4009a1', t: 'C172', trace: [...leg(0), ...leg(LATER_LEG_START_SEC)] };
+      const ids = processRawAdsbTrace(trace, '2026-09-08', TRACE_BASE_EPOCH_SEC).map((segment) => segment.id);
 
       expect(new Set(ids).size).toBe(ids.length);
     });
@@ -203,9 +273,9 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
     it('reads a raw trace with a timestamp, deriving its date, and a directory of files', () => {
       const dir = join(tempDir, 'traces');
       mkdirSync(dir);
-      const points = Array.from({ length: 12 }, (_, index) => [index * 10, 51.7 + index * 0.0045, -1.3 + index * 0.0045, 3000]);
-      writeFileSync(join(dir, 'a.json'), JSON.stringify({ icao: 'aa0001', t: 'C172', timestamp: 1788825600, trace: points }));
-      writeFileSync(join(dir, 'b.json'), JSON.stringify([{ icao: 'bb0002', t: 'PA28', timestamp: 1788825600, trace: points }]));
+      const points = flightLeg(0, LEG_ORIGIN, false);
+      writeFileSync(join(dir, 'a.json'), JSON.stringify({ icao: 'aa0001', t: 'C172', timestamp: DAY_START_EPOCH_SEC, trace: points }));
+      writeFileSync(join(dir, 'b.json'), JSON.stringify([{ icao: 'bb0002', t: 'PA28', timestamp: DAY_START_EPOCH_SEC, trace: points }]));
       writeFileSync(join(dir, 'ignored.txt'), 'not json');
 
       const segments = readAdsbSegments(dir);
@@ -216,7 +286,7 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
 
     it('asks for a date when a raw trace has no timestamp, and uses it when given', () => {
       const file = join(tempDir, 'untimed.json');
-      const points = Array.from({ length: 12 }, (_, index) => [index * 10, 51.7 + index * 0.0045, -1.3 + index * 0.0045, 3000]);
+      const points = flightLeg(0, LEG_ORIGIN, false);
       writeFileSync(file, JSON.stringify({ icao: 'cc0003', t: 'C172', trace: points }));
 
       expect(() => readAdsbSegments(file)).toThrow('has no timestamp');

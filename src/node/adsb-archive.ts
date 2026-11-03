@@ -3,8 +3,14 @@ import type { LinearFlightSegment } from '../schemas';
 import { type AdsbInputOptions, segmentsFromAdsbJson } from './stream-adsb';
 import { readTarFiles } from './tar-stream';
 
+/** First byte of the gzip magic number (RFC 1952, section 2.3.1). */
+const GZIP_ID1 = 0x1f;
+
+/** Second byte of the gzip magic number (RFC 1952, section 2.3.1). */
+const GZIP_ID2 = 0x8b;
+
 /** First two bytes of a gzip stream. `readsb` history files carry a `.json` name but are usually gzip-compressed. */
-const GZIP_MAGIC = [0x1f, 0x8b];
+const GZIP_MAGIC = [GZIP_ID1, GZIP_ID2];
 
 /** Matches the per-aircraft trace files of an `adsb.lol` `globe_history` archive, for example `./traces/3a/trace_full_3a1b2c.json`. */
 const TRACE_FILE = /(^|\/)trace_full_[0-9a-f~]+\.json$/;
