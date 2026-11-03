@@ -1,6 +1,6 @@
 import { synthesizeMultiFlyoverAudio } from './dsp/side-channels';
 import { encodeWavPcm16 } from './dsp/wav';
-import { encodeSpatialCell, localEnuToGeo } from './physics/geo';
+import { DEFAULT_SPATIAL_RESOLUTION, encodeSpatialCell, localEnuToGeo } from './physics/geo';
 import { buildConstellationIndex } from './solver/constellation';
 import type { DopplerDataset, GeoPoint3D, LinearFlightSegment } from './schemas';
 
@@ -26,7 +26,7 @@ const SEGMENT_ALPHA: LinearFlightSegment = {
   startGeo: localEnuToGeo(BUNDLED_GROUND_TRUTH, { x: -6000, y: -1200, z: 950 }),
   endGeo: localEnuToGeo(BUNDLED_GROUND_TRUTH, { x: 6000, y: -800, z: 980 }),
   groundspeedMps: 66.8,
-  h3Cell: encodeSpatialCell(BUNDLED_GROUND_TRUTH.lat, BUNDLED_GROUND_TRUTH.lon, 6),
+  h3Cell: encodeSpatialCell(BUNDLED_GROUND_TRUTH.lat, BUNDLED_GROUND_TRUTH.lon, DEFAULT_SPATIAL_RESOLUTION),
 };
 
 const SEGMENT_BRAVO: LinearFlightSegment = {
@@ -41,7 +41,7 @@ const SEGMENT_BRAVO: LinearFlightSegment = {
   startGeo: localEnuToGeo(BUNDLED_GROUND_TRUTH, { x: 1400, y: -7000, z: 1200 }),
   endGeo: localEnuToGeo(BUNDLED_GROUND_TRUTH, { x: 800, y: 7000, z: 1250 }),
   groundspeedMps: 77.9,
-  h3Cell: encodeSpatialCell(BUNDLED_GROUND_TRUTH.lat, BUNDLED_GROUND_TRUTH.lon, 6),
+  h3Cell: encodeSpatialCell(BUNDLED_GROUND_TRUTH.lat, BUNDLED_GROUND_TRUTH.lon, DEFAULT_SPATIAL_RESOLUTION),
 };
 
 const SEGMENT_CHARLIE: LinearFlightSegment = {
@@ -56,7 +56,7 @@ const SEGMENT_CHARLIE: LinearFlightSegment = {
   startGeo: localEnuToGeo(BUNDLED_GROUND_TRUTH, { x: -5000, y: 5000, z: 1400 }),
   endGeo: localEnuToGeo(BUNDLED_GROUND_TRUTH, { x: 5000, y: -5000, z: 1350 }),
   groundspeedMps: 78.5,
-  h3Cell: encodeSpatialCell(BUNDLED_GROUND_TRUTH.lat, BUNDLED_GROUND_TRUTH.lon, 6),
+  h3Cell: encodeSpatialCell(BUNDLED_GROUND_TRUTH.lat, BUNDLED_GROUND_TRUTH.lon, DEFAULT_SPATIAL_RESOLUTION),
 };
 
 /**
