@@ -1,3 +1,5 @@
+import { ANALYSIS_SAMPLE_RATE_HZ } from './constants';
+
 /**
  * Width of a Blackman window's transition band as a multiple of the sampling rate divided by the tap count: `transition = 5.5 * rate / taps`.
  */
@@ -7,6 +9,26 @@ const BLACKMAN_TRANSITION_FACTOR = 5.5;
  * Share of the output sample rate kept as passband. The filter is flat to this fraction of the output rate and must be fully attenuated from the output rate less this fraction, the lowest frequency that folds back into the passband.
  */
 const PASSBAND_FRACTION = 0.4;
+
+/**
+ * Constant term of the Blackman window.
+ */
+const BLACKMAN_A0 = 0.42;
+
+/**
+ * Amplitude of the fundamental cosine of the Blackman window.
+ */
+const BLACKMAN_A1 = 0.5;
+
+/**
+ * Amplitude of the second-harmonic cosine of the Blackman window.
+ */
+const BLACKMAN_A2 = 0.08;
+
+/**
+ * Smallest absolute kernel sum that is still normalised by; a sum below it means the kernel carries no usable gain, so it is left as designed rather than amplified by a near-zero divisor.
+ */
+const MIN_KERNEL_SUM = 1e-12;
 
 /**
  * Designs a normalized Blackman-windowed sinc low-pass FIR filter kernel.
@@ -25,14 +47,14 @@ export function designLowPassFirKernel(cutoffHz: number, sampleRateHz: number, n
   for (let i = 0; i < taps; i += 1) {
     const n = i - center;
     const sinc = n === 0 ? 2 * normalizedCutoff : Math.sin(2 * Math.PI * normalizedCutoff * n) / (Math.PI * n);
-    const blackman =
-      0.42 - 0.5 * Math.cos((2 * Math.PI * i) / (taps - 1)) + 0.08 * Math.cos((4 * Math.PI * i) / (taps - 1));
+    const windowPhase = (2 * Math.PI * i) / (taps - 1);
+    const blackman = BLACKMAN_A0 - BLACKMAN_A1 * Math.cos(windowPhase) + BLACKMAN_A2 * Math.cos(2 * windowPhase);
     const coeff = sinc * blackman;
     kernel[i] = coeff;
     sum += coeff;
   }
 
-  if (Math.abs(sum) > 1e-12) {
+  if (Math.abs(sum) > MIN_KERNEL_SUM) {
     for (let i = 0; i < taps; i += 1) {
       kernel[i] = (kernel[i] ?? 0) / sum;
     }
@@ -45,13 +67,13 @@ export function designLowPassFirKernel(cutoffHz: number, sampleRateHz: number, n
  * Decimates a high-sample-rate audio buffer (e.g. 48,000 Hz) down to a target sub-kilohertz/low-kilohertz rate (e.g. 2,000 Hz) after applying an anti-aliasing FIR low-pass filter.
  * @param input - Input mono audio samples.
  * @param inputRateHz - Original sample rate in Hz (e.g. 48000).
- * @param targetRateHz - Decimated sample rate in Hz (default 2000).
+ * @param targetRateHz - Decimated sample rate in Hz (default `ANALYSIS_SAMPLE_RATE_HZ`).
  * @returns Decimated mono audio samples and actual output sample rate.
  */
 export function decimateAudioStream(
   input: Readonly<Float32Array>,
   inputRateHz: number,
-  targetRateHz = 2000,
+  targetRateHz = ANALYSIS_SAMPLE_RATE_HZ,
 ): { readonly samples: Float32Array; readonly sampleRateHz: number } {
   if (!(inputRateHz > 0) || !(targetRateHz > 0)) {
     throw new Error(`Sample rates must be positive, got input ${String(inputRateHz)} Hz and target ${String(targetRateHz)} Hz`);
