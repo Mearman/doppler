@@ -10,4 +10,7 @@ coverage/
 reports/
 test-results/
 playwright-report/
+fixtures/*.wav
+fixtures/*.m4a
+fixtures/*.mp3
 .env

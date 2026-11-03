@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
 test.describe('Doppler PWA Offline Geolocation', () => {
@@ -45,5 +46,25 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     // Stop mic
     await page.locator('button:has-text("Stop Mic")').click();
     await expect(page.locator('button:has-text("Start Mic")')).toBeVisible({ timeout: 10000 });
+  });
+
+  test('processes audio clip from colsto youtube challenge via File Analyzer', async ({ page }) => {
+    await page.goto('/');
+
+    // Switch to File Analyzer tab
+    await page.click('button[role="tab"]:has-text("File Analyzer")');
+    await expect(page.locator('text=Upload Audio / Video')).toBeVisible();
+
+    // Upload colsto flyover audio snippet
+    const filePath = path.resolve(import.meta.dirname, '../../fixtures/colsto-flyover-36m.wav');
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(filePath);
+
+    // Verify file analysis status
+    await expect(page.locator('text=Analyzing colsto-flyover-36m.wav')).toBeVisible({ timeout: 10000 });
+
+    // Verify spectrogram updates to Audio Clip Analysis and renders detected flyover tracks
+    await expect(page.locator('text=Audio Clip Analysis')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('text=Flyover Track(s) Detected')).toBeVisible({ timeout: 15000 });
   });
 });
