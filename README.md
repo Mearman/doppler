@@ -85,7 +85,7 @@ Data flows through four layers inside `src/`, each importing only from the layer
 - **Fixture audio is not in git, so the Colsto integration tests can pass without testing anything.** `fixtures/*.wav`, `*.m4a` and `*.mp3` are gitignored (the full recording is about 300 MB). `cli/colsto-challenge.integration.test.ts` guards each test with `if (!existsSync(path)) { return; }`, so on a clean checkout and in CI those tests report as passed with no assertions run. Put the recordings in `fixtures/` before you rely on that suite. The suite sets a 60 second timeout because it decodes large WAV files.
 - **`pnpm test:e2e` needs a free port 4174** and does not reuse a running server (`reuseExistingServer: false`). Chromium runs with fake audio devices so that the microphone permission prompt does not block.
 - **The CLI bundle does not depend on `dist/`.** `tsdown.config.ts` marks `doppler` and `doppler/node` external for the CLI, but `cli/doppler.ts` imports `../src` directly, so the two builds are independent.
-- **The CLI version string is a literal** in `cli/doppler.ts` (`doppler v0.1.0`). It does not follow `package.json`, which semantic-release bumps. Update both until the CLI reads the version from one source.
+- **The CLI version is read from `package.json`** via `import.meta.url`, ensuring CLI output (`doppler -v`) stays synchronized with semantic-release without hardcoded literals.
 - **`incremental-adsb.yml` is a placeholder.** It builds the CLI and prints a message. It does not ingest or upload data.
 - **Workflows pin actions differently.** `pages.yml` pins actions by commit SHA. `ci.yml` and `incremental-adsb.yml` use version tags. Keep the pins in the style of the file you edit.
 
