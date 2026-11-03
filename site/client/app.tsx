@@ -195,7 +195,14 @@ export function App(): React.JSX.Element {
     ellipseLayer.current = L.layerGroup().addTo(map);
     leafletMap.current = map;
 
+    // Leaflet measures its container once, so a rotation or the layout stacking would otherwise leave tiles missing or misplaced.
+    const observer = new ResizeObserver(() => {
+      map.invalidateSize();
+    });
+    observer.observe(mapRef.current);
+
     return () => {
+      observer.disconnect();
       map.remove();
       leafletMap.current = null;
     };
@@ -358,7 +365,7 @@ export function App(): React.JSX.Element {
           <Text size="lg" fw={700} c="blue.4">
             Doppler
           </Text>
-          <Text size="sm" c="dimmed">
+          <Text size="sm" c="dimmed" className={styles.tagline}>
             Aircraft Acoustic Geolocation
           </Text>
         </Group>
@@ -519,7 +526,7 @@ export function App(): React.JSX.Element {
           </Tabs>
 
           {topHypothesis !== undefined && (
-            <Card withBorder padding="sm" radius="md" mt="auto" bg="dark.7">
+            <Card withBorder padding="sm" radius="md" mt="auto" bg="dark.7" className={styles.resultCard}>
               <Text size="xs" fw={700} c="blue.4" tt="uppercase">
                 Estimated Location ({(topHypothesis.probability * 100).toFixed(0)}%)
               </Text>

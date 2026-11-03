@@ -25,7 +25,7 @@ export function buildSite(outDir: string): Set<string> {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Doppler - Offline Aircraft Acoustic Geolocation</title>
   <meta name="description" content="Locate where an audio recording was made from the Doppler shifts of aircraft flyovers. Works offline.">
   <meta name="theme-color" content="#18181c">

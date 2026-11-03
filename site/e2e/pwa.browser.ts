@@ -126,5 +126,52 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     await expect(link).toHaveText(/^(v\d+\.\d+\.\d+|[0-9a-f]{7,})$/);
     await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
   });
+
+  test.describe('on a phone', () => {
+    const PHONE = { width: 390, height: 844 };
+    /** The smallest touch target WCAG 2.5.5 allows, in pixels. */
+    const TOUCH_TARGET_PX = 44;
+    /** The least width and height, in pixels, at which the map and the spectrogram are still usable. */
+    const MIN_VISUALIZER_PX = 160;
+    test.use({ viewport: PHONE, hasTouch: true, isMobile: true });
+
+    test('stacks the controls under a map and spectrogram that fit the screen, with no sideways scroll', async ({ page }) => {
+      await page.goto('/');
+      await page.locator('button:has-text("Simulate Flyover Stream")').click();
+      await expect(page.locator('text=Estimated Location')).toBeVisible({ timeout: 30000 });
+
+      const layout = await page.evaluate(() => {
+        const box = (selector: string): { width: number; height: number; top: number } => {
+          const element = document.querySelector(selector);
+          const rect = element?.getBoundingClientRect();
+
+          return { width: rect?.width ?? 0, height: rect?.height ?? 0, top: rect?.top ?? 0 };
+        };
+
+        return { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, map: box('.leaflet-container'), canvas: box('canvas') };
+      });
+
+      expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth);
+      expect(layout.map.width).toBeGreaterThanOrEqual(PHONE.width - 1);
+      expect(layout.map.height).toBeGreaterThanOrEqual(MIN_VISUALIZER_PX);
+      expect(layout.canvas.height).toBeGreaterThanOrEqual(MIN_VISUALIZER_PX / 2);
+      expect(layout.map.top + layout.map.height).toBeLessThanOrEqual(PHONE.height);
+    });
+
+    test('gives every control a touch target of at least 44 pixels', async ({ page }) => {
+      await page.goto('/');
+      await page.waitForSelector('header');
+      const undersized = await page.evaluate((minimum) => {
+        const attribution = '.leaflet-control-attribution a';
+
+        return [...document.querySelectorAll('button, [role=tab], input')]
+          .filter((element) => !element.matches(attribution))
+          .map((element) => ({ name: element.textContent.trim().slice(0, 24), height: element.getBoundingClientRect().height }))
+          .filter((target) => target.height > 0 && target.height < minimum);
+      }, TOUCH_TARGET_PX);
+
+      expect(undersized).toEqual([]);
+    });
+  });
 });
 
