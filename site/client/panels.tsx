@@ -8,7 +8,7 @@ import { FlyoverList } from './flyover-list';
 import { type FlightDataFile, MAX_JSON_CHARS, fitsInBrowser, formatBytes } from './flight-data-sources';
 import type { FlightData } from './use-flight-data';
 import type { LiveFeed } from './use-live-feed';
-import { FREE_PLAN_MAX_RADIUS_KM } from '../../src/live-adsb';
+import { MAX_RADIUS_KM } from '../../src/live-adsb';
 import { type Confidence, confidenceOf, describeEstimate, formatCoordinates, formatDistance, mapLink } from './result-summary';
 import type { Microphone } from './use-microphone';
 
@@ -256,7 +256,7 @@ interface LiveCardProps {
 }
 
 /**
- * The live ADS-B feed: the person's own free key, a start and stop control, and what the feed is tracking.
+ * The live ADS-B feed: a start and stop control, and what the feed is tracking.
  * @param props - The live feed.
  * @returns The card.
  */
@@ -269,36 +269,14 @@ function LiveCard(props: Readonly<LiveCardProps>): React.JSX.Element {
         Live feed <Badge variant="light" color={liveFeed.active ? 'teal' : 'gray'}>{liveFeed.active ? 'on' : 'off'}</Badge>
       </h2>
       <p className={styles.hint}>
-        Follows the aircraft in the area the map shows, as reported by the FlyItalyADSB community network. Zoom the map to where you are. The feed covers the visible area up to a {String(FREE_PLAN_MAX_RADIUS_KM)} km radius, which is the free plan limit. While it is on, it replaces the loaded flight data.
+        Follows the aircraft in the area the map shows, as reported by volunteer receivers through adsb.lol. No account or key is needed. Zoom the map to where you are: the feed covers the visible area up to a {String(Math.round(MAX_RADIUS_KM))} km radius. While it is on, it replaces the loaded flight data.
       </p>
-      <label className={styles.field}>
-        <span>FlyItalyADSB API key</span>
-        <input
-          type="password"
-          className={styles.textInput}
-          value={liveFeed.apiKey}
-          autoComplete="off"
-          spellCheck={false}
-          disabled={liveFeed.active}
-          onChange={(event) => {
-            liveFeed.setApiKey(event.target.value);
-          }}
-        />
-      </label>
-      <p className={styles.hint}>
-        <a className={styles.link} href="https://flyitalyadsb.com/en/data/api/" target="_blank" rel="noopener noreferrer">
-          Get a free key
-        </a>
-        . It is kept in this browser and sent only to FlyItalyADSB.
-      </p>
-      <Button
-        fullWidth
-        color={liveFeed.active ? 'red' : 'blue'}
-        disabled={!liveFeed.active && liveFeed.apiKey.trim() === ''}
-        onClick={liveFeed.active ? liveFeed.stop : liveFeed.start}
-      >
+      <Button fullWidth color={liveFeed.active ? 'red' : 'blue'} onClick={liveFeed.active ? liveFeed.stop : liveFeed.start}>
         {liveFeed.active ? 'Stop live feed' : 'Start live feed'}
       </Button>
+      {liveFeed.active && !liveFeed.coversView && (
+        <p className={styles.hint} role="status">The map shows more than the feed covers, so it follows only the circle around the middle of the map. Zoom in to where you are.</p>
+      )}
       {liveFeed.active && (
         <p className={styles.hint} role="status">
           {liveFeed.updatedAtEpochSec === null

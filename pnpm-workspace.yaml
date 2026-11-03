@@ -12,5 +12,7 @@ minimumReleaseAgeExclude:
 
 minimumReleaseAge: 10080
 
+# workerd is the local Workers runtime used by `wrangler dev`; `wrangler deploy` does not need its install script, so it stays blocked.
 allowBuilds:
   esbuild: true
+  workerd: false

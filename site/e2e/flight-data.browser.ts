@@ -1,4 +1,5 @@
 import { type Page, expect, test } from '@playwright/test';
+import { MAX_RADIUS_NM } from '../../src/live-limits';
 import { SYNTHETIC_DATA_FILE, SYNTHETIC_WAV, analyseSyntheticClip, loadSyntheticFlightData } from './support';
 
 /** Seconds between live feed polls, as the page schedules them. */
@@ -9,9 +10,6 @@ const FEED_START_EPOCH_SEC = 1788861600;
 
 /** Polls needed for a track to form a flight segment: a segment needs two reports far enough apart in time, and the first poll gives one. */
 const MIN_POLLS = 4;
-
-/** A key the tests type in; it reaches only the mocked feed. */
-const TEST_KEY = 'test-key-not-real';
 
 test.describe('flight data', () => {
   test('has no built-in demonstration data and says so before any flight data is loaded', async ({ page }) => {
@@ -67,67 +65,75 @@ test.describe('flight data', () => {
   });
 
   test.describe('live feed', () => {
-    /** Answers each poll with one light aircraft a little further east, so that the tracks form a segment after a few polls. */
-    async function mockFeed(page: Page): Promise<{ url: string; key: string | undefined }[]> {
-      const requests: { url: string; key: string | undefined }[] = [];
-      await page.route('https://api.flyitalyadsb.com/**', async (route) => {
-        requests.push({ url: route.request().url(), key: route.request().headers()['x-api-key'] });
-        const step = requests.length;
+    /** Answers each poll with one light aircraft a little further east, so that the tracks form a segment after a few polls. Returns the requested URLs. */
+    async function mockRelay(page: Page): Promise<string[]> {
+      const requested: string[] = [];
+      await page.route('https://doppler-adsb-relay.joseph-b4f.workers.dev/**', async (route) => {
+        requested.push(route.request().url());
+        const step = requested.length;
         await route.fulfill({
-          json: { now: FEED_START_EPOCH_SEC + step * POLL_SEC, ac: [{ hex: 'abc123', r: 'G-TEST', t: 'C172', lat: 51.75, lon: -1.3 + step * 0.002, alt_baro: 1000, seen_pos: 0 }] },
+          json: { now: (FEED_START_EPOCH_SEC + step * POLL_SEC) * 1000, ac: [{ hex: 'abc123', r: 'G-TEST', t: 'C172', lat: 51.75, lon: -1.3 + step * 0.002, alt_baro: 1000, seen_pos: 0 }] },
           headers: { 'access-control-allow-origin': '*' },
         });
       });
 
-      return requests;
+      return requested;
     }
 
-    test('polls with the key in a header, builds tracks and puts the stored flight data back when stopped', async ({ page }) => {
-      const requests = await mockFeed(page);
+    test('needs no key: polls the relay, builds tracks and puts the stored flight data back when stopped', async ({ page }) => {
+      const requested = await mockRelay(page);
       await page.clock.install();
       await page.goto('/');
       await page.getByRole('tab', { name: /data/i }).click();
-      await page.getByLabel('FlyItalyADSB API key').fill(TEST_KEY);
+      await expect(page.getByLabel(/key/i)).toHaveCount(0);
       await page.getByRole('button', { name: 'Start live feed' }).click();
 
-      await expect.poll(() => requests.length).toBeGreaterThanOrEqual(1);
       // The clock moves one poll at a time and each answer needs real time to arrive, so the test advances it until enough polls have been answered.
       await expect
         .poll(async () => {
           await page.clock.runFor(POLL_SEC * 1000);
 
-          return requests.length;
+          return requested.length;
         })
         .toBeGreaterThanOrEqual(MIN_POLLS);
 
       await expect(page.getByText(/Tracking 1 aircraft/)).toBeVisible();
       await expect(page.getByText(/[1-9]\d* flight segments/)).toBeVisible();
-      expect(requests[0]?.key).toBe(TEST_KEY);
-      expect(requests[0]?.url).toMatch(/^https:\/\/api\.flyitalyadsb\.com\/v2\/lat\/-?[\d.]+\/lon\/-?[\d.]+\/dist\/\d+$/);
+      expect(requested[0]).toMatch(/^https:\/\/doppler-adsb-relay\.joseph-b4f\.workers\.dev\/v2\/point\/-?[\d.]+\/-?[\d.]+\/\d+$/);
 
       await page.getByRole('button', { name: 'Stop live feed' }).click();
       await expect(page.getByText('None loaded.')).toBeVisible({ timeout: 10000 });
     });
 
-    test('stops and says why when the key is refused', async ({ page }) => {
-      await page.route('https://api.flyitalyadsb.com/**', async (route) => route.fulfill({ status: 403, headers: { 'access-control-allow-origin': '*' } }));
+    test('asks for no more than the relay forwards when the map is zoomed far out', async ({ page }) => {
+      const requested = await mockRelay(page);
       await page.goto('/');
       await page.getByRole('tab', { name: /data/i }).click();
-      await page.getByLabel('FlyItalyADSB API key').fill(TEST_KEY);
       await page.getByRole('button', { name: 'Start live feed' }).click();
 
-      await expect(page.getByRole('alert')).toContainText('refused the request');
-      await expect(page.getByRole('button', { name: 'Start live feed' })).toBeVisible();
+      await expect.poll(() => requested.length).toBeGreaterThanOrEqual(1);
+      const radiusNm = Number(requested[0]?.split('/').pop());
+      expect(radiusNm).toBeGreaterThan(0);
+      expect(radiusNm).toBeLessThanOrEqual(MAX_RADIUS_NM);
     });
 
-    test('keeps the key in this browser for the next visit', async ({ page }) => {
+    test('says so when the map shows more than the feed covers', async ({ page }) => {
+      await mockRelay(page);
       await page.goto('/');
       await page.getByRole('tab', { name: /data/i }).click();
-      await page.getByLabel('FlyItalyADSB API key').fill(TEST_KEY);
-      await page.reload();
-      await page.getByRole('tab', { name: /data/i }).click();
+      await page.getByRole('button', { name: 'Start live feed' }).click();
 
-      await expect(page.getByLabel('FlyItalyADSB API key')).toHaveValue(TEST_KEY);
+      await expect(page.getByText('The map shows more than the feed covers')).toBeVisible();
+    });
+
+    test('stops and says why when the relay refuses the query', async ({ page }) => {
+      await page.route('https://doppler-adsb-relay.joseph-b4f.workers.dev/**', async (route) => route.fulfill({ status: 404, headers: { 'access-control-allow-origin': '*' } }));
+      await page.goto('/');
+      await page.getByRole('tab', { name: /data/i }).click();
+      await page.getByRole('button', { name: 'Start live feed' }).click();
+
+      await expect(page.getByRole('alert')).toContainText('does not serve this query');
+      await expect(page.getByRole('button', { name: 'Start live feed' })).toBeVisible();
     });
   });
 

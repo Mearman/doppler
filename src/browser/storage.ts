@@ -77,31 +77,3 @@ export function importSessionJson(jsonText: string): LocationSession {
 
   return LocationSessionSchema.parse(parsed);
 }
-
-const LIVE_KEY_STORAGE_KEY = 'doppler_live_feed_key_v1';
-
-/**
- * Keeps the person's own live feed API key in this browser only, never sent anywhere but the feed it belongs to.
- * @param apiKey - The key to keep; an empty string removes it.
- * @throws When the browser refuses the write (storage disabled or full).
- */
-export function saveLiveFeedKey(apiKey: string): void {
-  if (apiKey === '') {
-    localStorage.removeItem(LIVE_KEY_STORAGE_KEY);
-
-    return;
-  }
-  localStorage.setItem(LIVE_KEY_STORAGE_KEY, apiKey);
-}
-
-/**
- * Reads the kept live feed key.
- * @returns The key, or an empty string when none is kept or storage is unavailable.
- */
-export function loadLiveFeedKey(): string {
-  try {
-    return localStorage.getItem(LIVE_KEY_STORAGE_KEY) ?? '';
-  } catch {
-    return '';
-  }
-}
