@@ -1,5 +1,10 @@
 import type { AdsbPing, AircraftCategory, LinearFlightSegment } from '../schemas';
-import { encodeSpatialCell, geoToEcef, slantDistanceMeters } from './geo';
+import { DEFAULT_SPATIAL_RESOLUTION, encodeSpatialCell, geoToEcef, slantDistanceMeters } from './geo';
+
+/** Shortest time span in seconds over which a range's end points define a constant-speed segment; a shorter span is treated as a single instant, so the interpolation fraction is zero instead of a division by a near-zero span. */
+const MIN_INTERPOLATION_SPAN_SEC = 1e-6;
+/** Shortest simplified segment in seconds; pings arrive at 1 Hz, so a shorter span between kept pings only arises from duplicate or near-duplicate timestamps, whose groundspeed would divide by a near-zero span and is dropped. */
+const MIN_SEGMENT_DURATION_SEC = 0.1;
 
 /**
  * Metadata describing an aircraft trace being compressed into 4D linear segments.
@@ -45,7 +50,7 @@ function rdpIndices(pings: readonly AdsbPing[], toleranceMeters: number): number
       if (ping === undefined || position === undefined) {
         continue;
       }
-      const fraction = totalDt > 1e-6 ? Math.max(0, Math.min(1, (ping.epochSec - first.epochSec) / totalDt)) : 0;
+      const fraction = totalDt > MIN_INTERPOLATION_SPAN_SEC ? Math.max(0, Math.min(1, (ping.epochSec - first.epochSec) / totalDt)) : 0;
       const error = Math.hypot(
         position.x - (firstEcef.x + (lastEcef.x - firstEcef.x) * fraction),
         position.y - (firstEcef.y + (lastEcef.y - firstEcef.y) * fraction),
@@ -96,14 +101,14 @@ export function simplifyTrajectory4D(
       continue;
     }
     const dt = endPing.epochSec - startPing.epochSec;
-    if (dt <= 0.1) {
+    if (dt <= MIN_SEGMENT_DURATION_SEC) {
       continue;
     }
 
     const dist3d = slantDistanceMeters(startPing, endPing);
     const groundspeedMps = dist3d / dt;
-    const midLat = 0.5 * (startPing.lat + endPing.lat);
-    const midLon = 0.5 * (startPing.lon + endPing.lon);
+    const midLat = (startPing.lat + endPing.lat) / 2;
+    const midLon = (startPing.lon + endPing.lon) / 2;
 
     segments.push({
       // The start time makes the id unique across a flight's runs and legs, which restart their index at zero.
@@ -118,7 +123,7 @@ export function simplifyTrajectory4D(
       startGeo: { lat: startPing.lat, lon: startPing.lon, altMeters: startPing.altMeters },
       endGeo: { lat: endPing.lat, lon: endPing.lon, altMeters: endPing.altMeters },
       groundspeedMps,
-      h3Cell: encodeSpatialCell(midLat, midLon, 6),
+      h3Cell: encodeSpatialCell(midLat, midLon, DEFAULT_SPATIAL_RESOLUTION),
     });
   }
 

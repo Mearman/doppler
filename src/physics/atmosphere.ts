@@ -8,6 +8,14 @@ const R_DRY_AIR = 287.058;
 const ISA_LAPSE_RATE_K_PER_M = 0.0065;
 /** Absolute zero offset in Celsius. */
 const KELVIN_OFFSET = 273.15;
+/** Speed of sound in dry air at 20 degrees Celsius in m/s, rounded to the nearest metre per second (`sqrt(GAMMA_DRY_AIR * R_DRY_AIR * 293.15)` is about 343.2). The default wherever a caller gives no temperature. */
+export const DEFAULT_SOUND_SPEED_MPS = 343;
+/** Lowest air temperature in kelvin that `speedOfSoundAtTempMps` evaluates, below any temperature found in the troposphere (about -93 degrees Celsius), so that an implausible input cannot drive the speed of sound towards zero. */
+const MIN_AIR_TEMPERATURE_KELVIN = 180;
+/** Lowest effective ray sound speed in m/s that `effectiveRaySoundSpeedMps` returns, so that a headwind estimate larger than the sound speed cannot make the propagation speed zero or negative. */
+const MIN_EFFECTIVE_SOUND_SPEED_MPS = 250;
+/** Fraction of the layer thickness at which a linear lapse-rate layer reaches its mean temperature: the midpoint. */
+const LAYER_MIDPOINT_FRACTION = 0.5;
 
 /**
  * Atmospheric state for acoustic wave propagation.
@@ -24,7 +32,7 @@ export interface AtmosphereState {
  * @returns Speed of sound in m/s.
  */
 export function speedOfSoundAtTempMps(tempCelsius: number): number {
-  const tempKelvin = Math.max(180, tempCelsius + KELVIN_OFFSET);
+  const tempKelvin = Math.max(MIN_AIR_TEMPERATURE_KELVIN, tempCelsius + KELVIN_OFFSET);
 
   return Math.sqrt(GAMMA_DRY_AIR * R_DRY_AIR * tempKelvin);
 }
@@ -43,7 +51,7 @@ export function effectiveRaySoundSpeedMps(
 ): number {
   const deltaAlt = Math.max(0, aircraftAltMeters - atmosphere.groundAltitudeMeters);
   // Path-averaged temperature across a linear lapse-rate layer is the midpoint temperature.
-  const midpointTempCelsius = atmosphere.groundTempCelsius - 0.5 * ISA_LAPSE_RATE_K_PER_M * deltaAlt;
+  const midpointTempCelsius = atmosphere.groundTempCelsius - LAYER_MIDPOINT_FRACTION * ISA_LAPSE_RATE_K_PER_M * deltaAlt;
   const thermalSpeed = speedOfSoundAtTempMps(midpointTempCelsius);
 
   if (atmosphere.windEnuMps === undefined || unitPropagationDirEnu === undefined) {
@@ -55,5 +63,5 @@ export function effectiveRaySoundSpeedMps(
     atmosphere.windEnuMps.y * unitPropagationDirEnu.y +
     atmosphere.windEnuMps.z * unitPropagationDirEnu.z;
 
-  return Math.max(250, thermalSpeed + windProjection);
+  return Math.max(MIN_EFFECTIVE_SOUND_SPEED_MPS, thermalSpeed + windProjection);
 }

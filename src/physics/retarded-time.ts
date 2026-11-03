@@ -1,5 +1,15 @@
 import type { GeoPoint3D, LinearFlightSegment } from '../schemas';
+import { DEFAULT_SOUND_SPEED_MPS } from './atmosphere';
 import { geoToLocalEnu } from './geo';
+
+/** Smallest margin `c^2 - v^2` in m^2/s^2 accepted by `solveRetardedDelaySec`; a source this close to the speed of sound makes the quadratic's leading coefficient vanish, so it is treated as outside the subsonic domain. */
+const MIN_SUBSONIC_MARGIN_SQ = 1e-3;
+/** Shortest segment duration in seconds used as the divisor of a segment's velocity, so a zero-length segment cannot divide by zero. */
+const MIN_SEGMENT_DURATION_SEC = 1e-3;
+/** Squared speed in m^2/s^2 below which a segment counts as stationary, so the closest-approach offset is zero instead of a division by a near-zero speed. */
+const MIN_SEGMENT_SPEED_SQ = 1e-6;
+/** Slant distance in metres below which the radial velocity is taken as zero, because the line of sight is undefined at the source position. */
+const MIN_RADIAL_DIRECTION_DISTANCE_METERS = 1e-3;
 
 /**
  * Evaluated acoustic state of an aircraft at a specific observer reception timestamp.
@@ -32,7 +42,7 @@ export function solveRetardedDelaySec(
   const vSq = velocityEnu.x * velocityEnu.x + velocityEnu.y * velocityEnu.y + velocityEnu.z * velocityEnu.z;
   const cSq = soundSpeedMps * soundSpeedMps;
   const cSqMinusVSq = cSq - vSq;
-  if (cSqMinusVSq <= 1e-3) {
+  if (cSqMinusVSq <= MIN_SUBSONIC_MARGIN_SQ) {
     throw new Error(`Supersonic or sonic source speed (v^2=${String(vSq)}, c^2=${String(cSq)}) is outside subsonic domain`);
   }
 
@@ -54,13 +64,13 @@ export function solveRetardedDelaySec(
 export function computeSegmentCpa(
   observer: Readonly<GeoPoint3D>,
   segment: Readonly<LinearFlightSegment>,
-  soundSpeedMps = 343.0,
+  soundSpeedMps = DEFAULT_SOUND_SPEED_MPS,
 ): {
   readonly cpaEmitEpochSec: number;
   readonly cpaDelayedEpochSec: number;
   readonly cpaSlantMeters: number;
 } {
-  const duration = Math.max(1e-3, segment.endEpochSec - segment.startEpochSec);
+  const duration = Math.max(MIN_SEGMENT_DURATION_SEC, segment.endEpochSec - segment.startEpochSec);
   const startEnu = geoToLocalEnu(observer, segment.startGeo);
   const endEnu = geoToLocalEnu(observer, segment.endGeo);
 
@@ -69,7 +79,7 @@ export function computeSegmentCpa(
   const vz = (endEnu.z - startEnu.z) / duration;
   const vSq = vx * vx + vy * vy + vz * vz;
 
-  const unclampedOffsetSec = vSq > 1e-6 ? -(startEnu.x * vx + startEnu.y * vy + startEnu.z * vz) / vSq : 0;
+  const unclampedOffsetSec = vSq > MIN_SEGMENT_SPEED_SQ ? -(startEnu.x * vx + startEnu.y * vy + startEnu.z * vz) / vSq : 0;
   const cpaOffsetSec = Math.max(0, Math.min(duration, unclampedOffsetSec));
 
   const cpaPosX = startEnu.x + vx * cpaOffsetSec;
@@ -108,8 +118,8 @@ export function synthesizeRetardedDopplerCurve(
   segment: Readonly<LinearFlightSegment>,
   options: Readonly<SynthesizeCurveOptions>,
 ): RetardedAcousticPoint[] {
-  const { baseFreqHz, obsEpochTimesSec, soundSpeedMps = 343.0 } = options;
-  const duration = Math.max(1e-3, segment.endEpochSec - segment.startEpochSec);
+  const { baseFreqHz, obsEpochTimesSec, soundSpeedMps = DEFAULT_SOUND_SPEED_MPS } = options;
+  const duration = Math.max(MIN_SEGMENT_DURATION_SEC, segment.endEpochSec - segment.startEpochSec);
   const startEnu = geoToLocalEnu(observer, segment.startGeo);
   const endEnu = geoToLocalEnu(observer, segment.endGeo);
 
@@ -140,7 +150,7 @@ export function synthesizeRetardedDopplerCurve(
     const slantDistanceMeters = Math.hypot(emitPosEnu.x, emitPosEnu.y, emitPosEnu.z);
     // Radial velocity approaching the observer is positive when ( -emitPosEnu · velocityEnu ) > 0
     const radialVelocityMps =
-      slantDistanceMeters > 1e-3
+      slantDistanceMeters > MIN_RADIAL_DIRECTION_DISTANCE_METERS
         ? -(emitPosEnu.x * velocityEnu.x + emitPosEnu.y * velocityEnu.y + emitPosEnu.z * velocityEnu.z) / slantDistanceMeters
         : 0;
 

@@ -4,10 +4,39 @@ import type { GeoPoint3D, Vector3D } from '../schemas';
 const WGS84_A = 6378137.0;
 /** WGS84 first eccentricity squared. */
 const WGS84_E2 = 6.69437999014e-3;
+/** Half a turn in degrees: the span from the prime meridian to the antimeridian, and the divisor of the degrees-to-radians factor (a half turn is pi radians). */
+const HALF_TURN_DEG = 180;
+/** A full turn in degrees, the period of longitude. */
+const FULL_TURN_DEG = 2 * HALF_TURN_DEG;
+/** Latitude of either pole in degrees, the bound of the valid latitude range. */
+const POLE_LATITUDE_DEG = 90;
 /** Degrees to radians conversion factor. */
-const DEG_TO_RAD = Math.PI / 180;
+const DEG_TO_RAD = Math.PI / HALF_TURN_DEG;
 /** Radians to degrees conversion factor. */
-const RAD_TO_DEG = 180 / Math.PI;
+const RAD_TO_DEG = HALF_TURN_DEG / Math.PI;
+
+/**
+ * Mean length of one degree of latitude in metres on the WGS84 ellipsoid, the constant term of the cosine series `MEAN - COS2 * cos(2 * lat) + COS4 * cos(4 * lat)`.
+ * Source: "Geographic coordinate system", section "Length of a degree" (https://en.wikipedia.org/wiki/Geographic_coordinate_system#Length_of_a_degree).
+ */
+const METERS_PER_DEG_LAT_MEAN = 111132.92;
+/** Amplitude of the second-harmonic term of the metres-per-degree-of-latitude series, in metres per degree. */
+const METERS_PER_DEG_LAT_COS2 = 559.82;
+/** Amplitude of the fourth-harmonic term of the metres-per-degree-of-latitude series, in metres per degree. */
+const METERS_PER_DEG_LAT_COS4 = 1.175;
+/** Harmonic order of the second latitude term. */
+const LAT_FOURTH_HARMONIC = 4;
+/**
+ * Fundamental amplitude of the length of one degree of longitude in metres on the WGS84 ellipsoid, as a cosine series in the latitude: `LON_COS1 * cos(lat) - LON_COS3 * cos(3 * lat)`.
+ * Source: "Geographic coordinate system", section "Length of a degree" (https://en.wikipedia.org/wiki/Geographic_coordinate_system#Length_of_a_degree).
+ */
+const METERS_PER_DEG_LON_COS1 = 111412.84;
+/** Amplitude of the third-harmonic term of the metres-per-degree-of-longitude series, in metres per degree. */
+const METERS_PER_DEG_LON_COS3 = 93.5;
+/** Harmonic order of the longitude series correction term. */
+const LON_THIRD_HARMONIC = 3;
+/** Floor on the metres per degree of longitude in metres per degree, so that an offset at a pole divides by a small positive length instead of zero. */
+const MIN_METERS_PER_DEG_LON = 1e-3;
 
 /**
  * Converts a geodetic coordinate (latitude, longitude, altitude) to Earth-Centered, Earth-Fixed (ECEF) Cartesian coordinates in meters.
@@ -65,16 +94,40 @@ export function geoToLocalEnu(origin: Readonly<GeoPoint3D>, target: Readonly<Geo
  */
 export function localEnuToGeo(origin: Readonly<GeoPoint3D>, enuOffset: Readonly<Vector3D>): GeoPoint3D {
   const latRad = origin.lat * DEG_TO_RAD;
-  const metersPerDegLat = 111132.92 - 559.82 * Math.cos(2 * latRad) + 1.175 * Math.cos(4 * latRad);
-  const metersPerDegLon = Math.max(1e-3, 111412.84 * Math.cos(latRad) - 93.5 * Math.cos(3 * latRad));
+  const metersPerDegLat =
+    METERS_PER_DEG_LAT_MEAN -
+    METERS_PER_DEG_LAT_COS2 * Math.cos(2 * latRad) +
+    METERS_PER_DEG_LAT_COS4 * Math.cos(LAT_FOURTH_HARMONIC * latRad);
+  const metersPerDegLon = Math.max(
+    MIN_METERS_PER_DEG_LON,
+    METERS_PER_DEG_LON_COS1 * Math.cos(latRad) - METERS_PER_DEG_LON_COS3 * Math.cos(LON_THIRD_HARMONIC * latRad),
+  );
 
-  const lat = Math.max(-90, Math.min(90, origin.lat + enuOffset.y / metersPerDegLat));
+  const lat = Math.max(-POLE_LATITUDE_DEG, Math.min(POLE_LATITUDE_DEG, origin.lat + enuOffset.y / metersPerDegLat));
   const rawLon = origin.lon + enuOffset.x / metersPerDegLon;
-  const lon = ((((rawLon + 180) % 360) + 360) % 360) - 180;
+  const lon = ((((rawLon + HALF_TURN_DEG) % FULL_TURN_DEG) + FULL_TURN_DEG) % FULL_TURN_DEG) - HALF_TURN_DEG;
   const altMeters = origin.altMeters + enuOffset.z;
 
   return { lat, lon, altMeters };
 }
+
+/** Grid resolution tier that `encodeSpatialCell` uses when the caller does not choose one (about 3.5 km cells). */
+export const DEFAULT_SPATIAL_RESOLUTION = 6;
+
+/** Highest resolution tier that uses the coarse cell size. */
+const COARSE_RESOLUTION_MAX = 4;
+/** Highest resolution tier that uses the medium cell size; tiers above it use the fine cell size. */
+const MEDIUM_RESOLUTION_MAX = 6;
+/** Cell side in degrees for the coarse tier (about 20 km). */
+const COARSE_CELL_STEP_DEG = 0.2;
+/** Cell side in degrees for the medium tier (about 3.5 km). */
+const MEDIUM_CELL_STEP_DEG = 0.032;
+/** Cell side in degrees for the fine tier (about 500 m). */
+const FINE_CELL_STEP_DEG = 0.005;
+/** Fraction of a cell side from a cell's lower edge to its centre. */
+const CELL_CENTRE_FRACTION = 0.5;
+/** Squared distance below which a terrain sample counts as coincident with the query point, in the squared units of the weighting distance in `interpolateTerrainElevationMeters`. */
+const COINCIDENT_SAMPLE_DISTANCE_SQ = 1e-12;
 
 /** Boundary vertices used to approximate an ellipse outline when the caller does not choose a count. */
 export const DEFAULT_ELLIPSE_SEGMENTS = 72;
@@ -120,6 +173,19 @@ export function ellipseOutline(
 }
 
 /**
+ * Looks up the side of a spatial cell for a resolution tier.
+ * @param resolution - Grid resolution tier.
+ * @returns Cell side in degrees.
+ */
+function cellStepDeg(resolution: number): number {
+  if (resolution <= COARSE_RESOLUTION_MAX) {
+    return COARSE_CELL_STEP_DEG;
+  }
+
+  return resolution <= MEDIUM_RESOLUTION_MAX ? MEDIUM_CELL_STEP_DEG : FINE_CELL_STEP_DEG;
+}
+
+/**
  * Computes the 3D Euclidean slant distance in meters between two geodetic coordinates.
  * @param a - First 3D point.
  * @param b - Second 3D point.
@@ -139,10 +205,10 @@ export function slantDistanceMeters(a: Readonly<GeoPoint3D>, b: Readonly<GeoPoin
  * @param resolution - Grid resolution tier (4 = ~20km, 6 = ~3.5km, 8 = ~500m).
  * @returns Deterministic cell string identifier.
  */
-export function encodeSpatialCell(lat: number, lon: number, resolution = 6): string {
-  const stepDeg = resolution <= 4 ? 0.2 : resolution <= 6 ? 0.032 : 0.005;
-  const latIdx = Math.floor((lat + 90) / stepDeg);
-  const lonIdx = Math.floor((lon + 180) / stepDeg);
+export function encodeSpatialCell(lat: number, lon: number, resolution = DEFAULT_SPATIAL_RESOLUTION): string {
+  const stepDeg = cellStepDeg(resolution);
+  const latIdx = Math.floor((lat + POLE_LATITUDE_DEG) / stepDeg);
+  const lonIdx = Math.floor((lon + HALF_TURN_DEG) / stepDeg);
 
   return `h3r${String(resolution)}_${String(latIdx)}_${String(lonIdx)}`;
 }
@@ -160,11 +226,11 @@ export function decodeSpatialCellCenter(cellId: string): { readonly lat: number;
   const resolution = Number(match[1]);
   const latIdx = Number(match[2]);
   const lonIdx = Number(match[3]);
-  const stepDeg = resolution <= 4 ? 0.2 : resolution <= 6 ? 0.032 : 0.005;
+  const stepDeg = cellStepDeg(resolution);
 
   return {
-    lat: -90 + (latIdx + 0.5) * stepDeg,
-    lon: -180 + (lonIdx + 0.5) * stepDeg,
+    lat: -POLE_LATITUDE_DEG + (latIdx + CELL_CENTRE_FRACTION) * stepDeg,
+    lon: -HALF_TURN_DEG + (lonIdx + CELL_CENTRE_FRACTION) * stepDeg,
   };
 }
 
@@ -185,7 +251,7 @@ export function interpolateTerrainElevationMeters(lat: number, lon: number, demG
     const dLat = (lat - sample.lat) * RAD_TO_DEG;
     const dLon = (lon - sample.lon) * RAD_TO_DEG;
     const distSq = dLat * dLat + dLon * dLon;
-    if (distSq < 1e-12) {
+    if (distSq < COINCIDENT_SAMPLE_DISTANCE_SQ) {
       return sample.altMeters;
     }
     const weight = 1 / distSq;
