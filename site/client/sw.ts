@@ -1,4 +1,4 @@
-import { SKIP_WAITING_MESSAGE } from './sw-protocol';
+import { SKIP_WAITING_MESSAGE, type Precache } from './sw-protocol';
 import { TILE_HOST } from './tiles';
 
 export {};
@@ -10,49 +10,24 @@ const TILE_CACHE = 'map-tiles';
 /** Upper bound on stored tiles, so the passive tile cache cannot grow without limit. */
 const TILE_CACHE_MAX_ENTRIES = 400;
 
-interface Precache {
-  readonly version: string;
-  readonly urls: readonly string[];
-}
-
-function isPrecache(value: unknown): value is Precache {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'version' in value &&
-    typeof value.version === 'string' &&
-    'urls' in value &&
-    Array.isArray(value.urls) &&
-    value.urls.every((url) => typeof url === 'string')
-  );
-}
-
-async function precache(): Promise<Precache> {
-  const response = await fetch('precache.json', { cache: 'no-store' });
-  const parsed: unknown = await response.json();
-  if (!isPrecache(parsed)) {
-    throw new Error('precache.json is not a precache manifest');
-  }
-
-  return parsed;
-}
+/** Replaced with the build's manifest by esbuild's `define`, so this script's bytes change with every content change. */
+declare const PRECACHE: Precache;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    precache().then(async ({ version, urls }) => {
-      const cache = await caches.open(version);
-      await cache.addAll(urls.map((url) => new Request(url, { cache: 'reload' })));
+    caches.open(PRECACHE.version).then(async (cache) => {
+      await cache.addAll(PRECACHE.urls.map((url) => new Request(url, { cache: 'reload' })));
     }),
   );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    precache().then(async ({ version }) => {
+    (async () => {
       const names = await caches.keys();
-      await Promise.all(names.filter((name) => name !== version && name !== TILE_CACHE).map(async (name) => caches.delete(name)));
+      await Promise.all(names.filter((name) => name !== PRECACHE.version && name !== TILE_CACHE).map(async (name) => caches.delete(name)));
       await self.clients.claim();
-    }),
+    })(),
   );
 });
 
@@ -110,8 +85,7 @@ self.addEventListener('fetch', (event) => {
       }
       const response = await fetch(request);
       if (response.ok) {
-        const { version } = await precache();
-        await (await caches.open(version)).put(request, response.clone());
+        await (await caches.open(PRECACHE.version)).put(request, response.clone());
       }
 
       return response;

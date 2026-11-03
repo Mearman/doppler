@@ -3,9 +3,9 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { vanillaExtractPlugin } from '@vanilla-extract/esbuild-plugin';
 import { build, type BuildOptions } from 'esbuild';
-import { buildSite } from './build-site';
+import { buildSite, SHELL_URLS } from './build-site';
 import { writeIcons } from './icons';
-import { finalisePrecache } from './precache';
+import { computePrecache } from './precache';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..');
@@ -19,7 +19,7 @@ if (typeof packageJson !== 'object' || packageJson === null || !('version' in pa
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
-const files = buildSite({ outDir, packageVersion: packageJson.version });
+const files = buildSite(outDir);
 copyFileSync(join(here, 'static', 'icon.svg'), join(outDir, 'icon.svg'));
 writeIcons(outDir, readFileSync(join(here, 'static', 'icon.svg'), 'utf8'));
 
@@ -46,14 +46,16 @@ const appBuild = await build({
   splitting: true,
 });
 
+// The app build holds every file the page loads at runtime (entry, worker, shared chunks, stylesheet). The service worker is excluded: the browser fetches it outside the cache, and listing it here would pin an old copy.
+const bundleUrls = Object.keys(appBuild.metafile.outputs).map((output) => relative(outDir, join(repoRoot, output)));
+const precache = computePrecache(outDir, packageJson.version, [...SHELL_URLS, ...bundleUrls]);
+
+// The service worker is built last because it embeds the precache version: its bytes must change whenever any precached byte does, or browsers never see a new worker for a content-only release and installed copies keep their old files.
 await build({
   ...common,
   entryPoints: {
     sw: join(here, 'client/sw.ts'),
   },
+  define: { PRECACHE: JSON.stringify(precache) },
 });
-
-// The app build holds every file the page loads at runtime (entry, worker, shared chunks, stylesheet). The service worker is excluded: the browser fetches it outside the cache, and listing it here would pin an old copy.
-const bundleUrls = Object.keys(appBuild.metafile.outputs).map((output) => relative(outDir, join(repoRoot, output)));
-finalisePrecache(outDir, bundleUrls);
 console.log(`Wrote ${String(files.size)} generated files and bundles to site-dist/`);

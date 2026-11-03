@@ -6,10 +6,11 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { decodeAudioFile } from '../../src/browser/decode-audio';
 import { MicMonitor } from '../../src/browser/mic-monitor';
+import { loadSessionsFromStorage, saveSessionToStorage } from '../../src/browser/storage';
 import { BUNDLED_GROUND_TRUTH, generateBundledReferenceAudio } from '../../src/bundled';
 import { ellipseOutline } from '../../src/physics/geo';
 import type { ComputedSingleFrame } from '../../src/dsp/spectrogram';
-import type { LocationHypothesis, LocationSession } from '../../src/schemas';
+import { LocationSession, type LocationHypothesis } from '../../src/schemas';
 import * as styles from '../styles.css';
 import { useOfflineStatus, type OfflineStatus } from './offline-status';
 import { SpectrogramViewer, type ClipSpectrogramData } from './spectrogram-viewer';
@@ -55,10 +56,11 @@ export function App(): React.JSX.Element {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   // Id of the audio analysis the worker is running, or null when idle. Only one runs at a time, because a second would race the first for the session.
   const [analysisId, setAnalysisId] = useState<string | null>(null);
+  // A release installs by itself only while nothing is running; the session is autosaved, so the reload keeps the results.
+  const offline = useOfflineStatus({ safeToReload: analysisId === null && !isListening });
   const [liveFrames, setLiveFrames] = useState<ComputedSingleFrame[]>([]);
   const [clipSpectrogram, setClipSpectrogram] = useState<ClipSpectrogramData | null>(null);
 
-  const offline = useOfflineStatus();
 
   const mapRef = useRef<HTMLDivElement | null>(null);
   const leafletMap = useRef<L.Map | null>(null);
@@ -105,6 +107,12 @@ export function App(): React.JSX.Element {
   }, []);
 
   useEffect(() => {
+    if (session !== null) {
+      saveSessionToStorage(session);
+    }
+  }, [session]);
+
+  useEffect(() => {
     // Instantiate background solver worker
     const worker = new Worker(new URL('./solver-worker.js', import.meta.url), { type: 'module' });
     workerRef.current = worker;
@@ -147,7 +155,14 @@ export function App(): React.JSX.Element {
       setErrorMessage(`The analysis worker stopped: ${e.message}`);
     };
 
-    worker.postMessage({ id: 'init', type: 'init_session', payload: {} });
+    // Resume the most recent saved session that still matches the current schema; an older shape is ignored rather than guessed at.
+    const saved = loadSessionsFromStorage()
+      .map((candidate) => LocationSession.safeParse(candidate))
+      .find((result) => result.success)?.data;
+    if (saved !== undefined) {
+      setSession(saved);
+    }
+    worker.postMessage({ id: 'init', type: 'init_session', payload: saved === undefined ? {} : { initialSession: saved } });
 
     return () => {
       worker.terminate();
@@ -356,7 +371,7 @@ export function App(): React.JSX.Element {
       {offline.updateAvailable && (
         <Alert color="blue" title="Update available" role="status">
           <Group justify="space-between">
-            <Text size="sm">A newer version is ready. Reloading clears the current session, so export it first.</Text>
+            <Text size="sm">A newer version is ready. It installs when the current analysis or listening stops. Your session is saved and returns after the reload.</Text>
             <Button size="compact-sm" onClick={offline.applyUpdate}>
               Reload to update
             </Button>

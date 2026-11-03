@@ -94,4 +94,20 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     await fileInput.setInputFiles(notAudio);
     await expect(page.getByRole('alert')).toContainText('notes.mp3 could not be read as audio');
   });
+
+  test('embeds the precache version in the service worker script so content-only releases reach installed copies', async ({ request }) => {
+    const script = await (await request.get('/sw.js')).text();
+
+    expect(script).toMatch(/version:"\d+\.\d+\.\d+\+[0-9a-f]{64}"/);
+  });
+
+  test('resumes the saved session after a reload', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('button:has-text("Simulate Flyover Stream")').click();
+    await expect(page.locator('text=Estimated Location')).toBeVisible({ timeout: 30000 });
+
+    await page.reload();
+
+    await expect(page.locator('text=Estimated Location')).toBeVisible({ timeout: 10000 });
+  });
 });
