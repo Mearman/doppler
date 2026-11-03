@@ -1,0 +1,104 @@
+import { execSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { BUNDLED_DATASET, BUNDLED_GROUND_TRUTH, BUNDLED_SEGMENTS } from '../src/bundled';
+import { synthesizeMultiFlyoverAudio } from '../src/dsp/side-channels';
+import { writeWavFile } from '../src/node/entry';
+import { DopplerDataset, LocationSession } from '../src/schemas';
+import { DopplerSessionEngine } from '../src/solver/session';
+
+describe('CLI Integration Suite (cli/doppler.ts)', { timeout: 30000 }, () => {
+  let tempDir: string;
+  let audioPath: string;
+  let sessionPath: string;
+  let rawAdsbPath: string;
+  let datasetOutputPath: string;
+
+  beforeAll(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'doppler-cli-test-'));
+    audioPath = join(tempDir, 'test-flyover.wav');
+    sessionPath = join(tempDir, 'test-session.json');
+    rawAdsbPath = join(tempDir, 'raw-adsb.json');
+    datasetOutputPath = join(tempDir, 'dataset-out.json');
+
+    // Synthesize a realistic 120-second flyover WAV
+    const sampleRateHz = 2000;
+    const durationSec = 120;
+    const seg = BUNDLED_SEGMENTS[0]!;
+    const audio = synthesizeMultiFlyoverAudio({
+      sampleRateHz,
+      startEpochSec: 1788900000,
+      durationSec,
+      observer: BUNDLED_GROUND_TRUTH,
+      flyovers: [{ segment: seg, baseFreqHz: 115.0, amplitude: 0.9 }],
+      noiseStd: 0.005,
+    });
+    writeWavFile(audioPath, audio, sampleRateHz);
+
+    // Save initial valid session
+    const engine = new DopplerSessionEngine({
+      dataset: BUNDLED_DATASET,
+      ambientTempCelsius: 20.0,
+    });
+    const initialSession = engine.getSession();
+    writeFileSync(sessionPath, JSON.stringify(initialSession, null, 2), 'utf8');
+
+    // Save raw flight segments for ingest test
+    writeFileSync(rawAdsbPath, JSON.stringify(BUNDLED_SEGMENTS.slice(0, 3), null, 2), 'utf8');
+  });
+
+  afterAll(() => {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // Ignored
+    }
+  });
+
+  it('prints version and help documentation', () => {
+    const versionOut = execSync('npx tsx cli/doppler.ts -v', { encoding: 'utf8' });
+    expect(versionOut).toContain('doppler v0.1.0');
+
+    const helpOut = execSync('npx tsx cli/doppler.ts --help', { encoding: 'utf8' });
+    expect(helpOut).toContain('Usage:');
+    expect(helpOut).toContain('doppler locate');
+    expect(helpOut).toContain('doppler session');
+    expect(helpOut).toContain('doppler ingest');
+  });
+
+  it('executes locate command with human-readable and JSON output formats', () => {
+    const humanOut = execSync(`npx tsx cli/doppler.ts locate "${audioPath}"`, { encoding: 'utf8' });
+    expect(humanOut).toContain('Doppler Geolocation Results');
+    expect(humanOut).toContain('Flyovers Found:');
+
+    const jsonOut = execSync(`npx tsx cli/doppler.ts locate "${audioPath}" --json`, { encoding: 'utf8' });
+    const parsed = LocationSession.parse(JSON.parse(jsonOut));
+    expect(parsed.observations.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('executes ingest command to generate DopplerDataset bundle', () => {
+    const ingestOut = execSync(`npx tsx cli/doppler.ts ingest --input "${rawAdsbPath}" --out "${datasetOutputPath}"`, {
+      encoding: 'utf8',
+    });
+    expect(ingestOut).toContain('Saved dataset bundle');
+
+    const datasetRaw: unknown = JSON.parse(readFileSync(datasetOutputPath, 'utf8'));
+    const dataset = DopplerDataset.parse(datasetRaw);
+    expect(dataset.segments.length).toBe(3);
+  });
+
+  it('executes session command to incrementally append audio observations', () => {
+    const sessionOut = execSync(`npx tsx cli/doppler.ts session "${sessionPath}" --add-audio "${audioPath}"`, {
+      encoding: 'utf8',
+    });
+    expect(sessionOut).toContain('Updated session');
+    expect(sessionOut).toContain('Total Observations:');
+
+    const updatedRaw: unknown = JSON.parse(readFileSync(sessionPath, 'utf8'));
+    const updated = LocationSession.parse(updatedRaw);
+    expect(updated.episodes.length).toBe(1);
+    expect(updated.observations.length).toBeGreaterThanOrEqual(1);
+  });
+});
