@@ -1,5 +1,5 @@
 import { downmixToMono } from '../dsp/channels';
-import { decodeWavBytes } from '../dsp/side-channels';
+import { decodeWavBytes } from '../dsp/wav';
 
 /** Rate the browser decodes compressed audio at. Analysis decimates to a far lower rate, so the exact value only has to cover the aircraft band. */
 const COMPRESSED_DECODE_RATE_HZ = 44100;

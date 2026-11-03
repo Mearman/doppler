@@ -1,4 +1,5 @@
-import { synthesizeMultiFlyoverAudio, encodeWavPcm16 } from './dsp/side-channels';
+import { synthesizeMultiFlyoverAudio } from './dsp/side-channels';
+import { encodeWavPcm16 } from './dsp/wav';
 import { encodeSpatialCell, localEnuToGeo } from './physics/geo';
 import { buildConstellationIndex } from './solver/constellation';
 import type { DopplerDataset, GeoPoint3D, LinearFlightSegment } from './schemas';
