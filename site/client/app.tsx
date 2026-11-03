@@ -4,9 +4,9 @@ import { Alert, Badge, Button, Card, Group, MantineProvider, Progress, Stack, Ta
 import '@mantine/core/styles.css';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import { decodeAudioFile } from '../../src/browser/decode-audio';
 import { MicMonitor } from '../../src/browser/mic-monitor';
 import { BUNDLED_GROUND_TRUTH, generateBundledReferenceAudio } from '../../src/bundled';
-import { decodeWavBytes } from '../../src/dsp/side-channels';
 import { ellipseOutline } from '../../src/physics/geo';
 import type { ComputedSingleFrame } from '../../src/dsp/spectrogram';
 import type { LocationHypothesis, LocationSession } from '../../src/schemas';
@@ -52,6 +52,9 @@ export function App(): React.JSX.Element {
   const [isNoisePolluted, setIsNoisePolluted] = useState(false);
   const [activeFlyoverCount, setActiveFlyoverCount] = useState(0);
   const [statusMessage, setStatusMessage] = useState('Select an audio file or start live listening.');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Id of the audio analysis the worker is running, or null when idle. Only one runs at a time, because a second would race the first for the session.
+  const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [liveFrames, setLiveFrames] = useState<ComputedSingleFrame[]>([]);
   const [clipSpectrogram, setClipSpectrogram] = useState<ClipSpectrogramData | null>(null);
 
@@ -90,7 +93,7 @@ export function App(): React.JSX.Element {
         });
       },
       onError: (err) => {
-        setStatusMessage(`Microphone error: ${err.message}`);
+        setErrorMessage(`Microphone error: ${err.message}`);
         setIsListening(false);
       },
     });
@@ -108,11 +111,13 @@ export function App(): React.JSX.Element {
 
     worker.onmessage = (event: MessageEvent<{ id: string; success: boolean; data?: unknown; error?: string }>) => {
       const res = event.data;
+      setAnalysisId((current) => (current === res.id ? null : current));
       if (!res.success) {
-        setStatusMessage(`Worker error: ${res.error ?? 'unknown'}`);
+        setErrorMessage(`Analysis failed: ${res.error ?? 'unknown error'}`);
 
         return;
       }
+      setErrorMessage(null);
       const data = res.data as {
         session?: LocationSession;
         observations?: unknown[];
@@ -138,7 +143,8 @@ export function App(): React.JSX.Element {
     };
 
     worker.onerror = (e) => {
-      setStatusMessage(`Worker error: ${e.message}`);
+      setAnalysisId(null);
+      setErrorMessage(`The analysis worker stopped: ${e.message}`);
     };
 
     worker.postMessage({ id: 'init', type: 'init_session', payload: {} });
@@ -240,6 +246,7 @@ export function App(): React.JSX.Element {
       setStatusMessage('Microphone stopped.');
     } else {
       setStatusMessage('Requesting microphone permissions (raw acoustics, AGC/noise-suppression disabled)...');
+      setErrorMessage(null);
       try {
         setClipSpectrogram(null);
         const episodeId = `live_${String(Date.now())}`;
@@ -250,7 +257,7 @@ export function App(): React.JSX.Element {
       } catch (err) {
         setIsListening(false);
         const msg = err instanceof Error ? err.message : String(err);
-        setStatusMessage(`Microphone permission / access error: ${msg}`);
+        setErrorMessage(`The microphone could not be started: ${msg}. Allow microphone access for this site in the browser settings and try again.`);
       }
     }
   };
@@ -270,51 +277,56 @@ export function App(): React.JSX.Element {
     }
   };
 
+  /**
+   * Hands decoded audio to the worker and marks the analysis as running until its reply arrives.
+   * @param id - Request id; the worker echoes it in its reply.
+   * @param payload - The `process_audio` payload.
+   * @param transfer - Buffers to move to the worker rather than copy.
+   */
+  const startAnalysis = (id: string, payload: Readonly<Record<string, unknown>>, transfer: readonly Transferable[]): void => {
+    setAnalysisId(id);
+    setErrorMessage(null);
+    workerRef.current?.postMessage({ id, type: 'process_audio', payload }, [...transfer]);
+  };
+
   // Simulate a live flyover stream for testing/demonstration without physical mic
   const handleSimulateFlyoverStream = (): void => {
     setStatusMessage('Synthesizing & analyzing 1,120s multi-flyover stream (Doppler ridges + 50Hz ENF)...');
     const audio = generateBundledReferenceAudio(2000);
-    workerRef.current?.postMessage({
-      id: `sim_${String(Date.now())}`,
-      type: 'process_audio',
-      payload: {
-        rawSamples: audio,
-        sampleRateHz: 2000,
-        startEpochSec: 1788900000,
-        episodeId: 'simulated_episode_1',
-      },
-    });
+    startAnalysis(
+      `sim_${String(Date.now())}`,
+      { rawSamples: audio, sampleRateHz: 2000, startEpochSec: 1788900000, episodeId: 'simulated_episode_1' },
+      [audio.buffer],
+    );
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>): void => {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
     if (file === undefined) {
       return;
     }
+    setErrorMessage(null);
     setStatusMessage(`Reading ${file.name}...`);
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const buffer = event.target?.result;
-      if (buffer instanceof ArrayBuffer) {
-        try {
-          const { samples, sampleRateHz } = decodeWavBytes(new Uint8Array(buffer));
-          workerRef.current?.postMessage({
-            id: `file_${String(Date.now())}`,
-            type: 'process_audio',
-            payload: {
-              rawSamples: samples,
-              sampleRateHz,
-              startEpochSec: Math.floor(Date.now() / 1000),
-              episodeId: file.name,
-            },
-          });
-          setStatusMessage(`Analyzing ${file.name} (${String(samples.length)} samples @ ${String(sampleRateHz)}Hz)...`);
-        } catch (err) {
-          setStatusMessage(`Failed to decode WAV: ${String(err)}`);
-        }
-      }
-    };
-    reader.readAsArrayBuffer(file);
+    file
+      .arrayBuffer()
+      .then(decodeAudioFile)
+      .then(({ samples, sampleRateHz }) => {
+        setStatusMessage(`Analyzing ${file.name} (${String(samples.length)} samples @ ${String(sampleRateHz)}Hz)...`);
+        startAnalysis(
+          `file_${String(Date.now())}`,
+          { rawSamples: samples, sampleRateHz, startEpochSec: Math.floor(Date.now() / 1000), episodeId: file.name },
+          [samples.buffer],
+        );
+      })
+      .catch((err: unknown) => {
+        setStatusMessage('Select an audio file or start live listening.');
+        setErrorMessage(`${file.name} could not be read as audio: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        // Clearing the input lets the same file be chosen again after a failure.
+        input.value = '';
+      });
   };
 
   const topHypothesis: LocationHypothesis | undefined = session?.hypotheses[0];
@@ -391,6 +403,7 @@ export function App(): React.JSX.Element {
                     size="xs"
                     variant="outline"
                     color="teal"
+                    disabled={analysisId !== null}
                     onClick={handleSimulateFlyoverStream}
                   >
                     Simulate Flyover Stream
@@ -435,12 +448,14 @@ export function App(): React.JSX.Element {
                   </Text>
                   <input
                     type="file"
-                    accept=".wav,.mp3,.mp4,.mov"
+                    accept="audio/*,video/*,.wav,.mp3,.m4a,.mp4,.mov"
+                    aria-label="Audio or video file to analyse"
+                    disabled={analysisId !== null}
                     onChange={handleFileUpload}
                     style={{ marginTop: '8px', fontSize: '13px' }}
                   />
                   <Text size="xs" c="dimmed" mt="xs">
-                    Supports 16-bit PCM WAV. Audio will be decimated to 2,000 Hz.
+                    WAV is read directly; other formats are decoded by your browser, so any format it can play works. Audio is decimated to 2,000 Hz and mixed to mono.
                   </Text>
                 </Card>
               </Stack>
@@ -502,7 +517,21 @@ export function App(): React.JSX.Element {
             </Card>
           )}
 
-          <Text size="xs" c="dimmed" mt="xs">
+          {analysisId !== null && <Progress value={100} animated size="sm" mt="xs" aria-label="Analysing audio" />}
+          {errorMessage !== null && (
+            <Alert
+              color="red"
+              mt="xs"
+              role="alert"
+              withCloseButton
+              onClose={() => {
+                setErrorMessage(null);
+              }}
+            >
+              <Text size="xs">{errorMessage}</Text>
+            </Alert>
+          )}
+          <Text size="xs" c="dimmed" mt="xs" role="status" aria-live="polite">
             {statusMessage}
           </Text>
         </aside>

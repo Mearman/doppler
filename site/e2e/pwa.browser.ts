@@ -79,4 +79,19 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     await page.locator('button:has-text("Simulate Flyover Stream")').click();
     await expect(page.locator('text=Estimated Location')).toBeVisible({ timeout: 30000 });
   });
+
+  test('reports a file the browser cannot decode as an alert and lets the same file be chosen again', async ({ page }) => {
+    await page.goto('/');
+    await page.getByRole('tab', { name: /file/i }).click();
+    const fileInput = page.locator('input[type="file"]');
+    const notAudio = { name: 'notes.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('this is not audio') };
+
+    await fileInput.setInputFiles(notAudio);
+    await expect(page.getByRole('alert')).toContainText('notes.mp3 could not be read as audio');
+
+    await page.getByRole('alert').getByRole('button').click();
+    await expect(page.getByRole('alert')).toBeHidden();
+    await fileInput.setInputFiles(notAudio);
+    await expect(page.getByRole('alert')).toContainText('notes.mp3 could not be read as audio');
+  });
 });
