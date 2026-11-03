@@ -1,4 +1,12 @@
 import type { AsymptoticKinematics } from '../schemas';
+import { DEFAULT_SOUND_SPEED_MPS } from './atmosphere';
+
+/** Default one-sigma frequency measurement uncertainty of an asymptote in Hz; a design default that callers with a known spectrogram resolution override. */
+const DEFAULT_FREQ_MEASUREMENT_STD_HZ = 0.15;
+/** Default one-sigma relative uncertainty of the measured inflection slope (dimensionless, 5 per cent). */
+const DEFAULT_SLOPE_REL_STD = 0.05;
+/** Floor on the inferred groundspeed in m/s used as the divisor of the relative speed uncertainty, so a near-zero speed cannot divide by zero. */
+const MIN_INFERRED_SPEED_MPS = 1e-3;
 
 /**
  * Input measurements from a spectrogram Doppler S-curve.
@@ -24,9 +32,9 @@ export interface DopplerCurveMeasurement {
  */
 export function extractAsymptoticKinematics(measurement: Readonly<DopplerCurveMeasurement>): AsymptoticKinematics {
   const { asymptoticHighHz, asymptoticLowHz, inflectionSlopeHzPerSec } = measurement;
-  const soundSpeedMps = measurement.soundSpeedMps ?? 343.0;
-  const freqStd = measurement.freqMeasurementStdHz ?? 0.15;
-  const slopeRelStd = measurement.slopeMeasurementRelStd ?? 0.05;
+  const soundSpeedMps = measurement.soundSpeedMps ?? DEFAULT_SOUND_SPEED_MPS;
+  const freqStd = measurement.freqMeasurementStdHz ?? DEFAULT_FREQ_MEASUREMENT_STD_HZ;
+  const slopeRelStd = measurement.slopeMeasurementRelStd ?? DEFAULT_SLOPE_REL_STD;
 
   if (asymptoticHighHz <= asymptoticLowHz || asymptoticLowHz <= 0) {
     throw new Error(
@@ -46,11 +54,11 @@ export function extractAsymptoticKinematics(measurement: Readonly<DopplerCurveMe
 
   // First-order error propagation for v = c * (f+ - f-) / (f+ + f-)
   const dvDfHigh = (2 * soundSpeedMps * asymptoticLowHz) / (sumFreq * sumFreq);
-  const dvDfLow = (-2 * soundSpeedMps * asymptoticHighHz) / (sumFreq * sumFreq);
+  const dvDfLow = -(2 * soundSpeedMps * asymptoticHighHz) / (sumFreq * sumFreq);
   const speedStdMps = Math.hypot(dvDfHigh * freqStd, dvDfLow * freqStd);
 
   // Relative uncertainty in d_slant combines relative speed uncertainty (weight 2) and slope uncertainty
-  const relSpeedStd = speedStdMps / Math.max(1e-3, inferredSpeedMps);
+  const relSpeedStd = speedStdMps / Math.max(MIN_INFERRED_SPEED_MPS, inferredSpeedMps);
   const relSlantStd = Math.hypot(2 * relSpeedStd, slopeRelStd);
   const slantStdMeters = inferredSlantMeters * relSlantStd;
 
