@@ -71,7 +71,7 @@ Data flows through four layers inside `src/`, each importing only from the layer
 
 ## Conventions
 
-- **Schema-attached guards.** Define a boundary type as `define(z.object({...}))` and export a type of the same name (`export type X = z.infer<typeof X>`). `define` adds `.is()`. It is the only place that uses `Object.assign`, and `eslint.config.ts` allows that for `src/define.ts` alone.
+- **Schema-attached guards.** Define a boundary schema as `export const XSchema = define(z.object({...}))` and export the type under the bare name (`export type X = z.infer<typeof XSchema>`), so the value and the type never share a name. `define` adds `.is()` by defining the property on the schema itself, since a spread copy of a Zod 4 schema loses its prototype methods.
 - **Records keyed by data** use `recordOf` (rejects `__proto__` keys) for parsing and `getOwn` for reading. A plain `record[key]` read finds inherited properties such as `constructor`.
 - **Strict TypeScript.** `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess` are on, so an optional field that you pass through is typed `T | undefined` and an indexed read must be narrowed. Build option objects with conditional spreads, as `solver-worker.ts` does.
 - **File suffixes decide the runner.** `*.unit.test.ts` and `*.integration.test.ts` run in Vitest. `*.browser.ts` under `site/e2e/` runs in Playwright only. Unit tests sit next to the source they test.
