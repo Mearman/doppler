@@ -1,23 +1,7 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-
-interface Precache {
-  readonly version: string;
-  readonly urls: readonly string[];
-}
-
-function isPrecache(value: unknown): value is Precache {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'version' in value &&
-    typeof value.version === 'string' &&
-    'urls' in value &&
-    Array.isArray(value.urls) &&
-    value.urls.every((url) => typeof url === 'string')
-  );
-}
+import type { Precache } from './client/sw-protocol';
 
 function fileOf(url: string): string {
   if (url === './') {
@@ -28,24 +12,18 @@ function fileOf(url: string): string {
 }
 
 /**
- * Adds the bundle outputs to the manifest's URL list and appends a digest of every precached file's bytes to its version, in place.
- * @param outDir - The built site directory, holding precache.json and every file it names.
- * @param bundleUrls - Bundle outputs relative to `outDir` (the worker, its shared chunks and the stylesheet), which the shell list cannot name because the bundler picks their file names.
- * @returns The version written.
+ * Builds the precache manifest the service worker embeds. The version is the package version plus a digest of every listed file's bytes, so it changes whenever any precached byte changes. The service worker script carries this version, which is what makes a content-only release change the script and so reach installed copies.
+ * @param outDir - The built site directory, holding every file in `urls`.
+ * @param packageVersion - The package version the build is for.
+ * @param urls - Every URL to precache, relative to `outDir`; duplicates are removed.
+ * @returns The manifest.
  */
-export function finalisePrecache(outDir: string, bundleUrls: readonly string[]): string {
-  const manifestPath = join(outDir, 'precache.json');
-  const parsed: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  if (!isPrecache(parsed)) {
-    throw new Error('precache.json is not a precache manifest');
-  }
-  const urls = [...new Set([...parsed.urls, ...bundleUrls])];
+export function computePrecache(outDir: string, packageVersion: string, urls: readonly string[]): Precache {
+  const unique = [...new Set(urls)];
   const digest = createHash('sha256');
-  for (const url of [...urls].sort()) {
+  for (const url of [...unique].sort()) {
     digest.update(url).update('\0').update(readFileSync(join(outDir, fileOf(url)))).update('\0');
   }
-  const version = `${parsed.version}+${digest.digest('hex')}`;
-  writeFileSync(manifestPath, JSON.stringify({ version, urls }));
 
-  return version;
+  return { version: `${packageVersion}+${digest.digest('hex')}`, urls: unique };
 }

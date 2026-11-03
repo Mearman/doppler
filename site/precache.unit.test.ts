@@ -1,10 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { finalisePrecache } from './precache';
+import { computePrecache } from './precache';
 
-describe('finalisePrecache', () => {
+describe('computePrecache', () => {
   let outDir = '';
 
   beforeEach(() => {
@@ -12,36 +12,31 @@ describe('finalisePrecache', () => {
     writeFileSync(join(outDir, 'index.html'), '<html></html>');
     writeFileSync(join(outDir, 'app.js'), 'app');
     writeFileSync(join(outDir, 'solver-worker.js'), 'worker');
-    writeFileSync(join(outDir, 'precache.json'), JSON.stringify({ version: '1.2.3', urls: ['./', 'app.js'] }));
   });
 
   afterEach(() => {
     rmSync(outDir, { recursive: true, force: true });
   });
 
-  function manifest(): { version: string; urls: string[] } {
-    return JSON.parse(readFileSync(join(outDir, 'precache.json'), 'utf8')) as { version: string; urls: string[] };
-  }
+  it('lists each URL once, in first-seen order', () => {
+    const { urls } = computePrecache(outDir, '1.2.3', ['./', 'app.js', 'solver-worker.js', 'app.js']);
 
-  it('adds bundle outputs to the list without duplicating shell entries', () => {
-    finalisePrecache(outDir, ['app.js', 'solver-worker.js']);
-
-    expect(manifest().urls).toEqual(['./', 'app.js', 'solver-worker.js']);
+    expect(urls).toEqual(['./', 'app.js', 'solver-worker.js']);
   });
 
   it('changes the version when any precached file changes', () => {
-    const before = finalisePrecache(outDir, ['solver-worker.js']);
-    writeFileSync(join(outDir, 'precache.json'), JSON.stringify({ version: '1.2.3', urls: ['./', 'app.js'] }));
+    const urls = ['./', 'app.js', 'solver-worker.js'];
+    const before = computePrecache(outDir, '1.2.3', urls).version;
     writeFileSync(join(outDir, 'solver-worker.js'), 'worker changed');
-    const after = finalisePrecache(outDir, ['solver-worker.js']);
+    const after = computePrecache(outDir, '1.2.3', urls).version;
 
     expect(before).toMatch(/^1\.2\.3\+[0-9a-f]{64}$/);
     expect(after).not.toBe(before);
   });
 
-  it('rejects a file that is not a precache manifest', () => {
-    writeFileSync(join(outDir, 'precache.json'), '{}');
+  it('keeps the version when nothing changes', () => {
+    const urls = ['./', 'app.js'];
 
-    expect(() => finalisePrecache(outDir, [])).toThrow('not a precache manifest');
+    expect(computePrecache(outDir, '1.2.3', urls)).toEqual(computePrecache(outDir, '1.2.3', urls));
   });
 });

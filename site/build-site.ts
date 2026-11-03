@@ -2,13 +2,23 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ICON_SPECS } from './icons';
 
-export interface BuildSiteOptions {
-  readonly outDir: string;
-  readonly packageVersion: string;
-}
+/** The page shell the service worker stores up front. Bundle outputs, whose names the bundler picks, are added by the build. */
+export const SHELL_URLS: readonly string[] = [
+  './',
+  'index.html',
+  'app.js',
+  'app.css',
+  'icon.svg',
+  'manifest.webmanifest',
+  ...ICON_SPECS.map((spec) => spec.file),
+];
 
-export function buildSite(options: Readonly<BuildSiteOptions>): Set<string> {
-  const { outDir, packageVersion } = options;
+/**
+ * Writes the HTML shell and web manifest.
+ * @param outDir - Directory the files are written to.
+ * @returns The files written, relative to `outDir`.
+ */
+export function buildSite(outDir: string): Set<string> {
   const written = new Set<string>();
 
   const html = `<!DOCTYPE html>
@@ -59,14 +69,6 @@ export function buildSite(options: Readonly<BuildSiteOptions>): Set<string> {
 
   writeFileSync(join(outDir, 'manifest.webmanifest'), JSON.stringify(webmanifest, null, 2), 'utf8');
   written.add('manifest.webmanifest');
-
-  const precache = {
-    version: packageVersion,
-    urls: ['./', 'index.html', 'app.js', 'app.css', 'icon.svg', 'manifest.webmanifest', ...ICON_SPECS.map((spec) => spec.file)],
-  };
-
-  writeFileSync(join(outDir, 'precache.json'), JSON.stringify(precache, null, 2), 'utf8');
-  written.add('precache.json');
 
   return written;
 }
