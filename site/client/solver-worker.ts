@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { BUNDLED_DATASET } from '../../src/bundled';
 import { decimateAudioStream } from '../../src/dsp/decimate';
 import { extractDopplerObservations } from '../../src/dsp/ridge-tracker';
+import { decodeWavBytes } from '../../src/dsp/wav';
 import { detectEnfSignature } from '../../src/dsp/side-channels';
 import { computeDopplerSpectrogram } from '../../src/dsp/spectrogram';
 import type { DopplerDataset } from '../../src/schemas';
@@ -36,6 +37,78 @@ let currentDataset: DopplerDataset = BUNDLED_DATASET;
  */
 function reply(message: Readonly<WorkerReply>): void {
   self.postMessage(message);
+}
+
+/** The audio of one analysis request. */
+interface AnalysisInput {
+  readonly rawSamples: Float32Array;
+  readonly sampleRateHz: number;
+  readonly startEpochSec: number;
+  readonly episodeId: string;
+}
+
+/**
+ * Runs the whole analysis of one clip, telling the page which stage it has reached so that a long clip shows progress instead of a bar that only spins.
+ * @param id - The request id every reply echoes.
+ * @param input - The clip's samples and where it starts.
+ */
+function analyse(id: string, input: Readonly<AnalysisInput>): void {
+    reply({ id, success: true, type: 'progress', stage: 'decimating' });
+    const decimated = decimateAudioStream(input.rawSamples, input.sampleRateHz, ANALYSIS_RATE_HZ);
+    const enf = detectEnfSignature(decimated.samples, decimated.sampleRateHz);
+
+    reply({ id, success: true, type: 'progress', stage: 'spectrogram' });
+    const spectrogram = computeDopplerSpectrogram(decimated.samples, {
+      sampleRateHz: decimated.sampleRateHz,
+      startTimeSec: input.startEpochSec,
+      fftSize: FFT_SIZE,
+      hopSamples: HOP_SAMPLES,
+      minFreqHz: MIN_FREQ_HZ,
+      maxFreqHz: MAX_FREQ_HZ,
+    });
+
+    reply({ id, success: true, type: 'progress', stage: 'tracking' });
+    const observations = extractDopplerObservations(spectrogram, {
+      episodeId: input.episodeId,
+      minSnrDb: MIN_RIDGE_SNR_DB,
+    });
+
+    reply({ id, success: true, type: 'progress', stage: 'locating' });
+    engine ??= new DopplerSessionEngine({
+      dataset: currentDataset,
+      constraints: enf.detected ? { enfNominalHz: enf.nominalHz === '50' ? '50' : '60' } : {},
+    });
+
+    engine.startEpisode(input.startEpochSec);
+    for (const obs of observations) {
+      engine.ingestObservation(obs);
+    }
+
+    const session = engine.getSession();
+    reply({
+      id: id,
+      success: true,
+      type: 'audio_analysed',
+      data: {
+        session,
+        observations,
+        enf,
+        spectrogram: {
+          minFreqHz: spectrogram.minFreqHz,
+          maxFreqHz: spectrogram.maxFreqHz,
+          binStepHz: spectrogram.binStepHz,
+          minBin: spectrogram.minBin,
+          maxBin: spectrogram.maxBin,
+          overallMedianNoiseDb: spectrogram.overallMedianNoiseDb,
+          frames: spectrogram.frames,
+        },
+        spectrogramSummary: {
+          frameCount: spectrogram.frames.length,
+          quietIntervalsCount: spectrogram.quietIntervals.length,
+          medianNoiseDb: spectrogram.overallMedianNoiseDb,
+        },
+      },
+    });
 }
 
 self.onmessage = (event: MessageEvent<unknown>) => {
@@ -92,60 +165,15 @@ self.onmessage = (event: MessageEvent<unknown>) => {
       }
 
       case 'process_audio': {
-        const p = req.payload;
+        analyse(req.id, req.payload);
 
-        const decimated = decimateAudioStream(p.rawSamples, p.sampleRateHz, ANALYSIS_RATE_HZ);
-        const enf = detectEnfSignature(decimated.samples, decimated.sampleRateHz);
+        return;
+      }
 
-        const spectrogram = computeDopplerSpectrogram(decimated.samples, {
-          sampleRateHz: decimated.sampleRateHz,
-          startTimeSec: p.startEpochSec,
-          fftSize: FFT_SIZE,
-          hopSamples: HOP_SAMPLES,
-          minFreqHz: MIN_FREQ_HZ,
-          maxFreqHz: MAX_FREQ_HZ,
-        });
-
-        const observations = extractDopplerObservations(spectrogram, {
-          episodeId: p.episodeId,
-          minSnrDb: MIN_RIDGE_SNR_DB,
-        });
-
-        engine ??= new DopplerSessionEngine({
-          dataset: currentDataset,
-          constraints: enf.detected ? { enfNominalHz: enf.nominalHz === '50' ? '50' : '60' } : {},
-        });
-
-        engine.startEpisode(p.startEpochSec);
-        for (const obs of observations) {
-          engine.ingestObservation(obs);
-        }
-
-        const session = engine.getSession();
-        reply({
-          id: req.id,
-          success: true,
-          type: 'audio_analysed',
-          data: {
-            session,
-            observations,
-            enf,
-            spectrogram: {
-              minFreqHz: spectrogram.minFreqHz,
-              maxFreqHz: spectrogram.maxFreqHz,
-              binStepHz: spectrogram.binStepHz,
-              minBin: spectrogram.minBin,
-              maxBin: spectrogram.maxBin,
-              overallMedianNoiseDb: spectrogram.overallMedianNoiseDb,
-              frames: spectrogram.frames,
-            },
-            spectrogramSummary: {
-              frameCount: spectrogram.frames.length,
-              quietIntervalsCount: spectrogram.quietIntervals.length,
-              medianNoiseDb: spectrogram.overallMedianNoiseDb,
-            },
-          },
-        });
+      case 'process_wav': {
+        reply({ id: req.id, success: true, type: 'progress', stage: 'decoding' });
+        const { samples, sampleRateHz } = decodeWavBytes(new Uint8Array(req.payload.bytes));
+        analyse(req.id, { rawSamples: samples, sampleRateHz, startEpochSec: req.payload.startEpochSec, episodeId: req.payload.episodeId });
 
         return;
       }

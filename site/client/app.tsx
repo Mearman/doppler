@@ -4,14 +4,14 @@ import { Alert, Anchor, Badge, Button, Card, Group, MantineProvider, Progress, S
 import '@mantine/core/styles.css';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { decodeAudioFile } from '../../src/browser/decode-audio';
+import { decodeAudioFile, isWav } from '../../src/browser/decode-audio';
 import { MicMonitor } from '../../src/browser/mic-monitor';
 import { loadSessionsFromStorage, saveSessionToStorage } from '../../src/browser/storage';
 import { BUNDLED_GROUND_TRUTH, generateBundledReferenceAudio } from '../../src/bundled';
 import { ellipseOutline } from '../../src/physics/geo';
 import type { ComputedSingleFrame } from '../../src/dsp/spectrogram';
 import { type LocationHypothesis, type LocationSession, LocationSessionSchema } from '../../src/schemas';
-import { WorkerReplySchema } from './worker-protocol';
+import { ANALYSIS_STAGES, type AnalysisStage, WorkerReplySchema } from './worker-protocol';
 import * as styles from '../styles.css';
 import { buildIdentity } from './build-info';
 import { describeBuild } from '../describe-build';
@@ -47,6 +47,18 @@ function describeOffline(status: Readonly<OfflineStatus>): OfflineBadge {
     : { label: 'Offline: stored map tiles only', color: 'orange' };
 }
 
+/** What each stage of an analysis is doing, as the progress line says it. */
+const STAGE_LABELS: Readonly<Record<AnalysisStage, string>> = {
+  decoding: 'Reading the recording',
+  decimating: 'Filtering and downsampling',
+  spectrogram: 'Computing the spectrogram',
+  tracking: 'Tracking flyovers',
+  locating: 'Locating the observer',
+};
+
+/** Bytes at the start of a file that the WAV check reads: the RIFF tag, its size field and the WAVE form type. */
+const WAV_SNIFF_BYTES = 12;
+
 /** Median noise floor threshold in dB above which audio is flagged as noise polluted. */
 const NOISE_POLLUTED_THRESHOLD_DB = -65;
 
@@ -62,6 +74,8 @@ export function App(): React.JSX.Element {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   // Id of the audio analysis the worker is running, or null when idle. Only one runs at a time, because a second would race the first for the session.
   const [analysisId, setAnalysisId] = useState<string | null>(null);
+  // How far the running analysis has got, which the worker reports as it moves from one stage to the next.
+  const [analysisStage, setAnalysisStage] = useState<AnalysisStage | null>(null);
   // A release installs by itself only while nothing is running; the session is autosaved, so the reload keeps the results.
   const offline = useOfflineStatus({ safeToReload: analysisId === null && !isListening });
   const [liveFrames, setLiveFrames] = useState<ComputedSingleFrame[]>([]);
@@ -129,6 +143,12 @@ export function App(): React.JSX.Element {
         return;
       }
       const res = parsed.data;
+      if (res.success && res.type === 'progress') {
+        setAnalysisStage(res.stage);
+
+        return;
+      }
+      setAnalysisStage(null);
       setAnalysisId((current) => (current === res.id ? null : current));
       if (!res.success) {
         setErrorMessage(`Analysis failed: ${res.error}`);
@@ -304,14 +324,17 @@ export function App(): React.JSX.Element {
 
   /**
    * Hands decoded audio to the worker and marks the analysis as running until its reply arrives.
-   * @param id - Request id; the worker echoes it in its reply.
-   * @param payload - The `process_audio` payload.
+   * @param request - The worker request, whose id the worker echoes in every reply.
    * @param transfer - Buffers to move to the worker rather than copy.
    */
-  const startAnalysis = (id: string, payload: Readonly<Record<string, unknown>>, transfer: readonly Transferable[]): void => {
-    setAnalysisId(id);
+  const startAnalysis = (
+    request: Readonly<{ id: string; type: 'process_audio' | 'process_wav'; payload: Readonly<Record<string, unknown>> }>,
+    transfer: readonly Transferable[],
+  ): void => {
+    setAnalysisId(request.id);
+    setAnalysisStage(null);
     setErrorMessage(null);
-    workerRef.current?.postMessage({ id, type: 'process_audio', payload }, [...transfer]);
+    workerRef.current?.postMessage(request, [...transfer]);
   };
 
   // Simulate a live flyover stream for testing/demonstration without physical mic
@@ -319,8 +342,7 @@ export function App(): React.JSX.Element {
     setStatusMessage('Synthesizing & analyzing 1,120s multi-flyover stream (Doppler ridges + 50Hz ENF)...');
     const audio = generateBundledReferenceAudio(2000);
     startAnalysis(
-      `sim_${String(Date.now())}`,
-      { rawSamples: audio, sampleRateHz: 2000, startEpochSec: 1788900000, episodeId: 'simulated_episode_1' },
+      { id: `sim_${String(Date.now())}`, type: 'process_audio', payload: { rawSamples: audio, sampleRateHz: 2000, startEpochSec: 1788900000, episodeId: 'simulated_episode_1' } },
       [audio.buffer],
     );
   };
@@ -335,14 +357,19 @@ export function App(): React.JSX.Element {
     setStatusMessage(`Reading ${file.name}...`);
     file
       .arrayBuffer()
-      .then(decodeAudioFile)
-      .then(({ samples, sampleRateHz }) => {
+      .then(async (bytes) => {
+        const id = `file_${String(Date.now())}`;
+        const startEpochSec = Math.floor(Date.now() / 1000);
+        // A WAV file decodes in the worker, so a long recording does not freeze the page while it is read into samples; other formats need the browser's decoder, which exists only on the page.
+        if (isWav(new Uint8Array(bytes, 0, Math.min(bytes.byteLength, WAV_SNIFF_BYTES)))) {
+          setStatusMessage(`Analyzing ${file.name}...`);
+          startAnalysis({ id, type: 'process_wav', payload: { bytes, startEpochSec, episodeId: file.name } }, [bytes]);
+
+          return;
+        }
+        const { samples, sampleRateHz } = await decodeAudioFile(bytes);
         setStatusMessage(`Analyzing ${file.name} (${String(samples.length)} samples @ ${String(sampleRateHz)}Hz)...`);
-        startAnalysis(
-          `file_${String(Date.now())}`,
-          { rawSamples: samples, sampleRateHz, startEpochSec: Math.floor(Date.now() / 1000), episodeId: file.name },
-          [samples.buffer],
-        );
+        startAnalysis({ id, type: 'process_audio', payload: { rawSamples: samples, sampleRateHz, startEpochSec, episodeId: file.name } }, [samples.buffer]);
       })
       .catch((err: unknown) => {
         setStatusMessage('Select an audio file or start live listening.');
@@ -546,7 +573,20 @@ export function App(): React.JSX.Element {
             </Card>
           )}
 
-          {analysisId !== null && <Progress value={100} animated size="sm" mt="xs" aria-label="Analysing audio" />}
+          {analysisId !== null && (
+            <>
+              <Progress
+                value={analysisStage === null ? 100 : ((ANALYSIS_STAGES.indexOf(analysisStage) + 1) / ANALYSIS_STAGES.length) * 100}
+                animated
+                size="sm"
+                mt="xs"
+                aria-label="Analysing audio"
+              />
+              <Text size="xs" c="dimmed" role="status" aria-live="polite">
+                {analysisStage === null ? 'Starting analysis' : STAGE_LABELS[analysisStage]}
+              </Text>
+            </>
+          )}
           {errorMessage !== null && (
             <Alert
               color="red"

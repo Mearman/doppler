@@ -13,7 +13,12 @@ const RIFF_SIZE_FIELD_BYTES = 4;
 /** Bytes of the RIFF header's tag plus size field that precede the WAVE form type. */
 const RIFF_FORM_OFFSET = FOUR_CC_BYTES + RIFF_SIZE_FIELD_BYTES;
 
-function isWav(bytes: Readonly<Uint8Array>): boolean {
+/**
+ * Whether the bytes open with a RIFF/WAVE header, which `decodeWavBytes` can read without the browser's decoder.
+ * @param bytes - The start of a file; the first 12 bytes are enough.
+ * @returns `true` for a WAV file.
+ */
+export function isWav(bytes: Readonly<Uint8Array>): boolean {
   const tag = (offset: number): string => String.fromCharCode(...bytes.subarray(offset, offset + FOUR_CC_BYTES));
 
   return bytes.length >= RIFF_FORM_OFFSET + FOUR_CC_BYTES && tag(0) === 'RIFF' && tag(RIFF_FORM_OFFSET) === 'WAVE';
