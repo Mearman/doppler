@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DopplerDataset, LocationSession } from '../schemas';
+import { type DopplerDataset, DopplerDatasetSchema, type LocationSession, LocationSessionSchema } from '../schemas';
 
 const SESSIONS_KEY = 'doppler_sessions_v1';
 const DATASET_KEY = 'doppler_custom_dataset_v1';
@@ -30,7 +30,7 @@ export function loadSessionsFromStorage(): LocationSession[] {
     }
     const parsed: unknown = JSON.parse(raw);
 
-    return z.array(LocationSession).parse(parsed);
+    return z.array(LocationSessionSchema).parse(parsed);
   } catch {
     return [];
   }
@@ -82,7 +82,7 @@ export function loadCustomDataset(): DopplerDataset | null {
     }
     const parsed: unknown = JSON.parse(raw);
 
-    return DopplerDataset.parse(parsed);
+    return DopplerDatasetSchema.parse(parsed);
   } catch {
     return null;
   }
@@ -106,5 +106,5 @@ export function exportSessionJson(session: Readonly<LocationSession>): string {
 export function importSessionJson(jsonText: string): LocationSession {
   const parsed: unknown = JSON.parse(jsonText);
 
-  return LocationSession.parse(parsed);
+  return LocationSessionSchema.parse(parsed);
 }
