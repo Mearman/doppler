@@ -16,7 +16,7 @@ const RawTracePoint = z.tuple([z.number(), z.number(), z.number(), z.union([z.nu
 /**
  * Raw trace format from `adsb.lol` or `tar1090` JSON exports.
  */
-export const RawAdsbTraceFile = define(
+export const RawAdsbTraceFileSchema = define(
   z.object({
     icao: z.string().min(1),
     r: z.string().optional(),
@@ -27,7 +27,7 @@ export const RawAdsbTraceFile = define(
     trace: z.array(RawTracePoint),
   }),
 );
-export type RawAdsbTraceFile = z.infer<typeof RawAdsbTraceFile>;
+export type RawAdsbTraceFile = z.infer<typeof RawAdsbTraceFileSchema>;
 
 /** A latitude and longitude rectangle. */
 export interface BoundingBox {
@@ -52,6 +52,12 @@ const MAX_AUDIBLE_ALTITUDE_METERS = 6096;
  * Ground speed, in m/s (about 195 knots), above which a segment of an aircraft whose type is not classified is dropped. Light propeller aircraft and helicopters seldom exceed it (about 2 percent of their segments in a sample of real traces), whereas most unclassified types are airliners that fly faster than this below 20,000 ft (about 56 percent of theirs) and have no narrowband propeller tone to match.
  */
 const MAX_UNCLASSIFIED_SPEED_MPS = 100;
+
+/** Milliseconds in a second, for converting between epoch seconds and `Date`. */
+const MS_PER_SECOND = 1000;
+
+/** Characters of the ISO 8601 calendar date (`YYYY-MM-DD`) at the start of a `Date.toISOString()` string. */
+const ISO_DATE_LENGTH = 'YYYY-MM-DD'.length;
 
 /** Metres in a foot. */
 const METERS_PER_FOOT = 0.3048;
@@ -171,15 +177,15 @@ export function segmentsFromAdsbJson(parsed: unknown, options: Readonly<AdsbInpu
   if (LinearFlightSegmentSchema.is(parsed)) {
     return [parsed];
   }
-  const trace = RawAdsbTraceFile.parse(parsed);
+  const trace = RawAdsbTraceFileSchema.parse(parsed);
   if (trace.timestamp !== undefined) {
-    return processRawAdsbTrace(trace, new Date(trace.timestamp * 1000).toISOString().slice(0, 10), trace.timestamp, options);
+    return processRawAdsbTrace(trace, new Date(trace.timestamp * MS_PER_SECOND).toISOString().slice(0, ISO_DATE_LENGTH), trace.timestamp, options);
   }
   if (options.dateIso === undefined) {
     throw new Error(`trace ${trace.icao} has no timestamp, so its date is unknown; pass the date`);
   }
 
-  return processRawAdsbTrace(trace, options.dateIso, Date.parse(`${options.dateIso}T00:00:00Z`) / 1000, options);
+  return processRawAdsbTrace(trace, options.dateIso, Date.parse(`${options.dateIso}T00:00:00Z`) / MS_PER_SECOND, options);
 }
 
 /**
