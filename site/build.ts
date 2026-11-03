@@ -1,11 +1,15 @@
 import { copyFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveBuildIdentity } from '@exadev/build-identity';
 import { vanillaExtractPlugin } from '@vanilla-extract/esbuild-plugin';
 import { build, type BuildOptions } from 'esbuild';
 import { buildSite, SHELL_URLS } from './build-site';
 import { writeIcons } from './icons';
 import { computePrecache } from './precache';
+
+/** The GitHub repository the release and commit links point at. */
+const REPOSITORY_SLUG = 'Mearman/doppler';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..');
@@ -15,6 +19,9 @@ const packageJson: unknown = JSON.parse(readFileSync(join(repoRoot, 'package.jso
 if (typeof packageJson !== 'object' || packageJson === null || !('version' in packageJson) || typeof packageJson.version !== 'string') {
   throw new Error('package.json has no string version');
 }
+
+// The identity is read from git state at build time: a release only when its tag provably points at this commit, otherwise the commit itself, so the link never names a release that does not exist yet.
+const buildIdentity = resolveBuildIdentity(repoRoot, REPOSITORY_SLUG);
 
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
@@ -44,6 +51,7 @@ const appBuild = await build({
     'solver-worker': join(here, 'client/solver-worker.ts'),
   },
   splitting: true,
+  define: { BUILD_IDENTITY: JSON.stringify(buildIdentity) },
 });
 
 // The audio worklet module is a build of its own, without code splitting, so that it is one self-contained file: the page loads it through audioWorklet.addModule, outside the app's chunk graph.

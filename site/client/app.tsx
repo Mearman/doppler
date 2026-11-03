@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert, Badge, Button, Card, Group, MantineProvider, Progress, Stack, Tabs, Text } from '@mantine/core';
+import { Alert, Anchor, Badge, Button, Card, Group, MantineProvider, Progress, Stack, Tabs, Text } from '@mantine/core';
 import '@mantine/core/styles.css';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -13,6 +13,8 @@ import type { ComputedSingleFrame } from '../../src/dsp/spectrogram';
 import { type LocationHypothesis, type LocationSession, LocationSessionSchema } from '../../src/schemas';
 import { WorkerReplySchema } from './worker-protocol';
 import * as styles from '../styles.css';
+import { buildIdentity } from './build-info';
+import { describeBuild } from '../describe-build';
 import { useOfflineStatus, type OfflineStatus } from './offline-status';
 import { SpectrogramViewer, type ClipSpectrogramData } from './spectrogram-viewer';
 import { TILE_URL_TEMPLATE } from './tiles';
@@ -347,6 +349,7 @@ export function App(): React.JSX.Element {
 
   const topHypothesis: LocationHypothesis | undefined = session?.hypotheses[0];
   const offlineBadge = describeOffline(offline);
+  const { label: buildLabel, title: buildTitle } = describeBuild(buildIdentity);
 
   return (
     <div className={styles.appContainer}>
@@ -366,6 +369,9 @@ export function App(): React.JSX.Element {
           <Badge color={offlineBadge.color} variant="light">
             {offlineBadge.label}
           </Badge>
+          <Anchor size="sm" href={buildIdentity.url} target="_blank" rel="noopener noreferrer" title={buildTitle}>
+            {buildLabel}
+          </Anchor>
         </Group>
       </header>
 
