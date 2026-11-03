@@ -10,7 +10,7 @@ import { loadSessionsFromStorage, saveSessionToStorage } from '../../src/browser
 import { BUNDLED_GROUND_TRUTH, generateBundledReferenceAudio } from '../../src/bundled';
 import { ellipseOutline } from '../../src/physics/geo';
 import type { ComputedSingleFrame } from '../../src/dsp/spectrogram';
-import { LocationSession, type LocationHypothesis } from '../../src/schemas';
+import { type LocationHypothesis, type LocationSession, LocationSessionSchema } from '../../src/schemas';
 import * as styles from '../styles.css';
 import { useOfflineStatus, type OfflineStatus } from './offline-status';
 import { SpectrogramViewer, type ClipSpectrogramData } from './spectrogram-viewer';
@@ -157,7 +157,7 @@ export function App(): React.JSX.Element {
 
     // Resume the most recent saved session that still matches the current schema; an older shape is ignored rather than guessed at.
     const saved = loadSessionsFromStorage()
-      .map((candidate) => LocationSession.safeParse(candidate))
+      .map((candidate) => LocationSessionSchema.safeParse(candidate))
       .find((result) => result.success)?.data;
     if (saved !== undefined) {
       setSession(saved);

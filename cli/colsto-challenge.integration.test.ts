@@ -8,7 +8,7 @@ import { extractDopplerObservations } from '../src/dsp/ridge-tracker';
 import { detectEnfSignature } from '../src/dsp/side-channels';
 import { computeDopplerSpectrogram } from '../src/dsp/spectrogram';
 import { readWavFile } from '../src/node/entry';
-import { LocationSession } from '../src/schemas';
+import { LocationSessionSchema } from '../src/schemas';
 import { DopplerSessionEngine } from '../src/solver/session';
 
 describe('Colsto YouTube Geolocation Challenge Audio Verification', { timeout: 60000 }, () => {
@@ -241,7 +241,7 @@ describe('Colsto YouTube Geolocation Challenge Audio Verification', { timeout: 6
     }
 
     const jsonOut = execSync(`npx tsx cli/doppler.ts locate "${snippet45Path}" --json`, { encoding: 'utf8' });
-    const session = LocationSession.parse(JSON.parse(jsonOut));
+    const session = LocationSessionSchema.parse(JSON.parse(jsonOut));
     expect(session.observations.length).toBeGreaterThanOrEqual(1);
   });
 

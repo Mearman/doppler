@@ -7,7 +7,7 @@ import { extractDopplerObservations } from '../src/dsp/ridge-tracker';
 import { detectEnfSignature } from '../src/dsp/side-channels';
 import { computeDopplerSpectrogram } from '../src/dsp/spectrogram';
 import { type BoundingBox, loadDatasetFile, readAdsbArchiveSegments, readAdsbSegments, readWavFile, saveDatasetBundle } from '../src/node/entry';
-import { LocationSession } from '../src/schemas';
+import { LocationSessionSchema } from '../src/schemas';
 import { DopplerSessionEngine } from '../src/solver/session';
 
 const PackageManifest = z.object({
@@ -175,7 +175,7 @@ async function run(): Promise<void> {
     }
 
     const sessionRaw = readFileSync(sessionPath, 'utf8');
-    const initialSession = LocationSession.parse(JSON.parse(sessionRaw));
+    const initialSession = LocationSessionSchema.parse(JSON.parse(sessionRaw));
     const { samples, sampleRateHz } = readWavFile(audioPath);
     const decimated = decimateAudioStream(samples, sampleRateHz, 2000);
 
