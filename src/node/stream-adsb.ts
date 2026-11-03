@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { define } from '../define';
 import { simplifyTrajectory4D } from '../physics/rdp';
 import type { AdsbPing, AircraftCategory, GeoPoint3D } from '../schemas';
-import { DopplerDataset, LinearFlightSegment } from '../schemas';
+import { type DopplerDataset, DopplerDatasetSchema, type LinearFlightSegment, LinearFlightSegmentSchema } from '../schemas';
 import { buildConstellationIndex } from '../solver/constellation';
 import { SLANT_SIGMA_FLOOR_METERS } from '../solver/gauss-newton';
 
@@ -166,9 +166,9 @@ export function segmentsFromAdsbJson(parsed: unknown, options: Readonly<AdsbInpu
     return parsed.flatMap((element: unknown) => segmentsFromAdsbJson(element, options));
   }
   if (typeof parsed === 'object' && parsed !== null && 'segments' in parsed) {
-    return z.array(LinearFlightSegment).parse(parsed.segments);
+    return z.array(LinearFlightSegmentSchema).parse(parsed.segments);
   }
-  if (LinearFlightSegment.is(parsed)) {
+  if (LinearFlightSegmentSchema.is(parsed)) {
     return [parsed];
   }
   const trace = RawAdsbTraceFile.parse(parsed);
@@ -214,7 +214,7 @@ export function loadDatasetFile(filePath: string): DopplerDataset {
   const raw = readFileSync(filePath, 'utf8');
   const parsed: unknown = JSON.parse(raw);
 
-  return DopplerDataset.parse(parsed);
+  return DopplerDatasetSchema.parse(parsed);
 }
 
 /** Items serialised per write, so no single string approaches the engine's string length limit however large the dataset. */

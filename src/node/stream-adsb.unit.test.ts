@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BUNDLED_DEM_GRID, BUNDLED_SEGMENTS } from '../bundled';
-import { DopplerDataset } from '../schemas';
+import { DopplerDatasetSchema } from '../schemas';
 import {
   classifyAircraftCategory,
   loadDatasetFile,
@@ -262,7 +262,7 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
       expect(saved.elevationGrid.length).toBe(BUNDLED_DEM_GRID.length);
 
       const loaded = loadDatasetFile(filePath);
-      const validated = DopplerDataset.parse(loaded);
+      const validated = DopplerDatasetSchema.parse(loaded);
 
       expect(validated.version).toBe('1.0.0');
       expect(validated.segments.length).toBe(BUNDLED_SEGMENTS.length);

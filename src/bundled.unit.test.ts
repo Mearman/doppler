@@ -9,7 +9,7 @@ import {
   generateBundledReferenceWavBytes,
 } from './bundled';
 import { decodeWavBytes } from './dsp/wav';
-import { DopplerDataset } from './schemas';
+import { DopplerDatasetSchema } from './schemas';
 
 /** Seconds of audio the bundled generator renders, and the rate the test renders it at. */
 const BUNDLED_DURATION_SEC = 1120;
@@ -36,7 +36,7 @@ describe('Bundled Reference Dataset and Audio Synthesis', () => {
 
   it('validates schema compliance and constellations of the bundled dataset', () => {
     // Validates against Zod schema
-    const parsed = DopplerDataset.parse(BUNDLED_DATASET);
+    const parsed = DopplerDatasetSchema.parse(BUNDLED_DATASET);
     expect(parsed.version).toBe('1.0.0-bundled');
     expect(parsed.segments.length).toBe(BUNDLED_SEGMENTS.length);
     expect(parsed.constellations.length).toBe(BUNDLED_CONSTELLATIONS.length);

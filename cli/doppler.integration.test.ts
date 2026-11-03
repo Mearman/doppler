@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BUNDLED_DATASET, BUNDLED_GROUND_TRUTH, BUNDLED_SEGMENTS } from '../src/bundled';
 import { synthesizeMultiFlyoverAudio } from '../src/dsp/side-channels';
 import { writeWavFile } from '../src/node/entry';
-import { DopplerDataset, LocationSession } from '../src/schemas';
+import { DopplerDatasetSchema, LocationSessionSchema } from '../src/schemas';
 import { DopplerSessionEngine } from '../src/solver/session';
 
 describe('CLI Integration Suite (cli/doppler.ts)', { timeout: 30000 }, () => {
@@ -74,7 +74,7 @@ describe('CLI Integration Suite (cli/doppler.ts)', { timeout: 30000 }, () => {
     expect(humanOut).toContain('Flyovers Found:');
 
     const jsonOut = execSync(`npx tsx cli/doppler.ts locate "${audioPath}" --json`, { encoding: 'utf8' });
-    const parsed = LocationSession.parse(JSON.parse(jsonOut));
+    const parsed = LocationSessionSchema.parse(JSON.parse(jsonOut));
     expect(parsed.observations.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -85,7 +85,7 @@ describe('CLI Integration Suite (cli/doppler.ts)', { timeout: 30000 }, () => {
     expect(ingestOut).toContain('Saved dataset bundle');
 
     const datasetRaw: unknown = JSON.parse(readFileSync(datasetOutputPath, 'utf8'));
-    const dataset = DopplerDataset.parse(datasetRaw);
+    const dataset = DopplerDatasetSchema.parse(datasetRaw);
     expect(dataset.segments.length).toBe(3);
   });
 
@@ -97,7 +97,7 @@ describe('CLI Integration Suite (cli/doppler.ts)', { timeout: 30000 }, () => {
     expect(sessionOut).toContain('Total Observations:');
 
     const updatedRaw: unknown = JSON.parse(readFileSync(sessionPath, 'utf8'));
-    const updated = LocationSession.parse(updatedRaw);
+    const updated = LocationSessionSchema.parse(updatedRaw);
     expect(updated.episodes.length).toBe(1);
     expect(updated.observations.length).toBeGreaterThanOrEqual(1);
   });
