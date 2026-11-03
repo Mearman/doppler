@@ -13,62 +13,56 @@ export interface TraceMetadata {
 }
 
 /**
- * Computes the 3D spatial interpolation deviation in meters of a raw ping from the linear segment connecting `first` and `last` at the ping's timestamp.
+ * Selects the indices of key vertices using 4D Ramer-Douglas-Peucker simplification over `(X, Y, Z, t)`: the end points are kept, and a range is split at its worst-fitting ping while that ping lies further than `toleranceMeters` from the straight, constant-speed segment joining the range's ends.
+ * The ranges are processed from an explicit stack rather than by recursion, because a trace of tens of thousands of pings can split unevenly enough to exhaust the call stack, and each ping's ECEF position is computed once.
+ * @param pings - Chronologically ordered pings.
+ * @param toleranceMeters - Largest allowed 3D deviation of a dropped ping.
+ * @returns Ascending indices of the kept pings, always including the first and last.
  */
-function interpolatedSpatialErrorMeters(
-  ping: Readonly<AdsbPing>,
-  first: Readonly<AdsbPing>,
-  last: Readonly<AdsbPing>,
-): number {
-  const totalDt = last.epochSec - first.epochSec;
-  const fraction = totalDt > 1e-6 ? Math.max(0, Math.min(1, (ping.epochSec - first.epochSec) / totalDt)) : 0;
+function rdpIndices(pings: readonly AdsbPing[], toleranceMeters: number): number[] {
+  const count = pings.length;
+  const ecef = pings.map((ping) => geoToEcef(ping));
+  const keep = new Uint8Array(count);
+  keep[0] = 1;
+  keep[count - 1] = 1;
+  const ranges: [number, number][] = [[0, count - 1]];
 
-  const firstEcef = geoToEcef(first);
-  const lastEcef = geoToEcef(last);
-  const pingEcef = geoToEcef(ping);
-
-  const interpX = firstEcef.x + (lastEcef.x - firstEcef.x) * fraction;
-  const interpY = firstEcef.y + (lastEcef.y - firstEcef.y) * fraction;
-  const interpZ = firstEcef.z + (lastEcef.z - firstEcef.z) * fraction;
-
-  return Math.hypot(pingEcef.x - interpX, pingEcef.y - interpY, pingEcef.z - interpZ);
-}
-
-/**
- * Recursively selects indices of key vertices using 4D Ramer-Douglas-Peucker simplification over `(X, Y, Z, t)`.
- */
-function rdpIndices(pings: readonly AdsbPing[], startIdx: number, endIdx: number, toleranceMeters: number): number[] {
-  if (endIdx <= startIdx + 1) {
-    return [startIdx, endIdx];
-  }
-  const first = pings[startIdx];
-  const last = pings[endIdx];
-  if (first === undefined || last === undefined) {
-    return [startIdx, endIdx];
-  }
-
-  let maxError = -1;
-  let splitIdx = startIdx;
-
-  for (let i = startIdx + 1; i < endIdx; i += 1) {
-    const candidate = pings[i];
-    if (candidate !== undefined) {
-      const err = interpolatedSpatialErrorMeters(candidate, first, last);
-      if (err > maxError) {
-        maxError = err;
+  for (let range = ranges.pop(); range !== undefined; range = ranges.pop()) {
+    const [startIdx, endIdx] = range;
+    const first = pings[startIdx];
+    const last = pings[endIdx];
+    const firstEcef = ecef[startIdx];
+    const lastEcef = ecef[endIdx];
+    if (endIdx <= startIdx + 1 || first === undefined || last === undefined || firstEcef === undefined || lastEcef === undefined) {
+      continue;
+    }
+    const totalDt = last.epochSec - first.epochSec;
+    let maxError = -1;
+    let splitIdx = startIdx;
+    for (let i = startIdx + 1; i < endIdx; i += 1) {
+      const ping = pings[i];
+      const position = ecef[i];
+      if (ping === undefined || position === undefined) {
+        continue;
+      }
+      const fraction = totalDt > 1e-6 ? Math.max(0, Math.min(1, (ping.epochSec - first.epochSec) / totalDt)) : 0;
+      const error = Math.hypot(
+        position.x - (firstEcef.x + (lastEcef.x - firstEcef.x) * fraction),
+        position.y - (firstEcef.y + (lastEcef.y - firstEcef.y) * fraction),
+        position.z - (firstEcef.z + (lastEcef.z - firstEcef.z) * fraction),
+      );
+      if (error > maxError) {
+        maxError = error;
         splitIdx = i;
       }
     }
+    if (maxError > toleranceMeters && splitIdx > startIdx && splitIdx < endIdx) {
+      keep[splitIdx] = 1;
+      ranges.push([startIdx, splitIdx], [splitIdx, endIdx]);
+    }
   }
 
-  if (maxError > toleranceMeters && splitIdx > startIdx && splitIdx < endIdx) {
-    const left = rdpIndices(pings, startIdx, splitIdx, toleranceMeters);
-    const right = rdpIndices(pings, splitIdx, endIdx, toleranceMeters);
-
-    return [...left.slice(0, -1), ...right];
-  }
-
-  return [startIdx, endIdx];
+  return Array.from(keep.entries(), ([index, kept]) => (kept === 1 ? index : -1)).filter((index) => index !== -1);
 }
 
 /**
@@ -87,7 +81,7 @@ export function simplifyTrajectory4D(
     return [];
   }
   const sorted = [...pings].sort((a, b) => a.epochSec - b.epochSec);
-  const keyIndices = rdpIndices(sorted, 0, sorted.length - 1, toleranceMeters);
+  const keyIndices = rdpIndices(sorted, toleranceMeters);
   const segments: LinearFlightSegment[] = [];
 
   for (let k = 0; k < keyIndices.length - 1; k += 1) {

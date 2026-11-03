@@ -232,10 +232,8 @@ async function run(): Promise<void> {
     const bboxIdx = args.indexOf('--bbox');
     const bbox = bboxIdx !== -1 ? parseBoundingBox(args[bboxIdx + 1]) : undefined;
     // `-` reads an `adsb.lol` globe_history tar from standard input, so the daily archive streams through without touching disk.
-    const segments =
-      inputPath === '-'
-        ? await readAdsbArchiveSegments(process.stdin, bbox === undefined ? {} : { bbox })
-        : readAdsbSegments(inputPath, dateIso === undefined ? {} : { dateIso });
+    const options = { ...(bbox === undefined ? {} : { bbox }), ...(dateIso === undefined ? {} : { dateIso }) };
+    const segments = inputPath === '-' ? await readAdsbArchiveSegments(process.stdin, options) : readAdsbSegments(inputPath, options);
     saveDatasetBundle(outputPath, segments);
     console.log(`Saved dataset bundle with ${String(segments.length)} segments to ${outputPath}`);
 

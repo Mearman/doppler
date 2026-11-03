@@ -42,6 +42,11 @@ export function unmatchedObservationLogPenalty(observation: Readonly<DopplerObse
 }
 
 /**
+ * Smallest slant-distance standard deviation, in metres, the solver assumes for any observation, however sharp its fit. Positional error in the flight data below this is invisible to the solver.
+ */
+export const SLANT_SIGMA_FLOOR_METERS = 40;
+
+/**
  * Paired observation and flight segment constraint used during Gauss-Newton coordinate refinement.
  */
 export interface ObservationSegmentPair {
@@ -117,7 +122,7 @@ function evaluateResidualsAtEnuOffset(
 
     // 1. Slant distance residual (normalized by slant std)
     const slantDiff = cpa.cpaSlantMeters - observation.kinematics.inferredSlantMeters;
-    const slantSigma = Math.max(40, observation.kinematics.slantStdMeters);
+    const slantSigma = Math.max(SLANT_SIGMA_FLOOR_METERS, observation.kinematics.slantStdMeters);
     residuals.push(slantDiff / slantSigma);
 
     // 1b. Speed residual: the observer position does not change it, so it carries no gradient, but it scores how well each segment's ground speed explains the measured speed, which ranks rival segments for the same flyover.

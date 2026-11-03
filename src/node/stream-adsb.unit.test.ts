@@ -156,6 +156,26 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
       expect(segments.every((segment) => segment.endEpochSec - segment.startEpochSec < 200)).toBe(true);
     });
 
+    it('drops pings outside a region and does not bridge a flight that leaves and returns', () => {
+      const trace: RawAdsbTraceFile = { icao: '4009a1', t: 'C172', trace: [...leg(0), ...leg(130)] };
+      const everything = processRawAdsbTrace(trace, '2026-09-08', base);
+      // The box covers only the second half of the first leg and nothing of the second.
+      const bbox = { minLat: 51.7 + 6 * 0.0045, minLon: -2, maxLat: 51.7 + 11 * 0.0045 + 0.001, maxLon: -1 };
+      const inside = processRawAdsbTrace(trace, '2026-09-08', base, { bbox });
+
+      expect(inside.length).toBeGreaterThan(0);
+      expect(inside.length).toBeLessThan(everything.length + 1);
+      expect(inside.every((segment) => segment.startGeo.lat >= bbox.minLat && segment.endGeo.lat <= bbox.maxLat)).toBe(true);
+    });
+
+    it('compresses more at a looser tolerance', () => {
+      const wobble: RawAdsbTraceFile['trace'] = Array.from({ length: 200 }, (_, index) => [index * 2, 51.7 + index * 0.0009, -1.3 + Math.sin(index / 3) * 0.0004, 3000, 130, 45]);
+      const tight = processRawAdsbTrace({ icao: '4009a1', t: 'C172', trace: wobble }, '2026-09-08', base, { toleranceMeters: 2 });
+      const loose = processRawAdsbTrace({ icao: '4009a1', t: 'C172', trace: wobble }, '2026-09-08', base, { toleranceMeters: 60 });
+
+      expect(loose.length).toBeLessThan(tight.length);
+    });
+
     it('gives every segment of one flight a distinct id', () => {
       const trace: RawAdsbTraceFile = { icao: '4009a1', t: 'C172', trace: [...leg(0), ...leg(400)] };
       const ids = processRawAdsbTrace(trace, '2026-09-08', base).map((segment) => segment.id);

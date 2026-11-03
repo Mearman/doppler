@@ -6,6 +6,7 @@ import { simplifyTrajectory4D } from '../physics/rdp';
 import type { AdsbPing, AircraftCategory, GeoPoint3D } from '../schemas';
 import { DopplerDataset, LinearFlightSegment } from '../schemas';
 import { buildConstellationIndex } from '../solver/constellation';
+import { SLANT_SIGMA_FLOOR_METERS } from '../solver/gauss-newton';
 
 /**
  * One trace sample as `adsb.lol` and `tar1090` write it: seconds since the trace's `timestamp`, latitude, longitude and barometric altitude in feet, which is the string `ground` on the ground and null when unreported. Later fields (ground speed, track, flags) are ignored.
@@ -28,6 +29,22 @@ export const RawAdsbTraceFile = define(
 );
 export type RawAdsbTraceFile = z.infer<typeof RawAdsbTraceFile>;
 
+/** A latitude and longitude rectangle. */
+export interface BoundingBox {
+  readonly minLat: number;
+  readonly minLon: number;
+  readonly maxLat: number;
+  readonly maxLon: number;
+}
+
+/** Options for turning raw traces into segments. */
+export interface AdsbTraceOptions {
+  /** Pings outside the box end the current run and are dropped, so memory and work follow the region rather than the whole archive. A flight audible from inside the box but flying outside it is lost, so the box should include the acoustic range (about 10 km) as margin. */
+  readonly bbox?: Readonly<BoundingBox>;
+  /** Largest 3D deviation, in metres, of a dropped ping from its segment. Defaults to half the solver's slant-distance sigma floor, so compression error cannot dominate the solver's own uncertainty. */
+  readonly toleranceMeters?: number;
+}
+
 /** Altitude above which a ping is cruise traffic that the microphone is not expected to hear: 20,000 ft. */
 const MAX_AUDIBLE_ALTITUDE_METERS = 6096;
 
@@ -38,6 +55,10 @@ const METERS_PER_FOOT = 0.3048;
  * Longest gap between pings that is still bridged by a straight line. Across a longer gap the aircraft can have turned, landed or left coverage, and at light-aircraft speeds (about 70 m/s) a two-minute gap is already about 8 km, comparable to the acoustic range, so the run is split instead.
  */
 const MAX_PING_GAP_SEC = 120;
+
+function inBox(lat: number, lon: number, box: Readonly<BoundingBox>): boolean {
+  return lat >= box.minLat && lat <= box.maxLat && lon >= box.minLon && lon <= box.maxLon;
+}
 
 /**
  * Classifies an ICAO aircraft type code into a propulsion category.
@@ -76,12 +97,14 @@ export function classifyAircraftCategory(typeCode?: string): AircraftCategory {
  * @param trace - Raw ADS-B trace record.
  * @param dateIso - ISO calendar date (`YYYY-MM-DD`).
  * @param baseEpochSec - Epoch seconds that the trace's point offsets are counted from.
+ * @param options - Region filter and compression tolerance.
  * @returns Array of linear flight segments.
  */
 export function processRawAdsbTrace(
   trace: Readonly<RawAdsbTraceFile>,
   dateIso: string,
   baseEpochSec: number,
+  options: Readonly<AdsbTraceOptions> = {},
 ): LinearFlightSegment[] {
   const typeCode = trace.t ?? 'unknown';
   const category = classifyAircraftCategory(typeCode);
@@ -99,7 +122,8 @@ export function processRawAdsbTrace(
   };
   for (const [offsetSec, lat, lon, altFeet] of trace.trace) {
     const altMeters = typeof altFeet === 'number' ? altFeet * METERS_PER_FOOT : undefined;
-    if (altMeters === undefined || altMeters > MAX_AUDIBLE_ALTITUDE_METERS) {
+    const { bbox } = options;
+    if (altMeters === undefined || altMeters > MAX_AUDIBLE_ALTITUDE_METERS || (bbox !== undefined && !inBox(lat, lon, bbox))) {
       endRun();
       continue;
     }
@@ -113,12 +137,12 @@ export function processRawAdsbTrace(
   endRun();
 
   return runs.flatMap((pings) =>
-    simplifyTrajectory4D(pings, { flightId: trace.r ?? trace.icao, icao24: trace.icao, typeCode, category, dateIso }),
+    simplifyTrajectory4D(pings, { flightId: trace.r ?? trace.icao, icao24: trace.icao, typeCode, category, dateIso }, options.toleranceMeters ?? SLANT_SIGMA_FLOOR_METERS / 2),
   );
 }
 
 /** Options for reading ADS-B input. */
-export interface AdsbInputOptions {
+export interface AdsbInputOptions extends AdsbTraceOptions {
   /** Calendar date (`YYYY-MM-DD`) for raw traces that carry no `timestamp`; their offsets count from midnight UTC of this date. */
   readonly dateIso?: string;
 }
@@ -142,13 +166,13 @@ export function segmentsFromAdsbJson(parsed: unknown, options: Readonly<AdsbInpu
   }
   const trace = RawAdsbTraceFile.parse(parsed);
   if (trace.timestamp !== undefined) {
-    return processRawAdsbTrace(trace, new Date(trace.timestamp * 1000).toISOString().slice(0, 10), trace.timestamp);
+    return processRawAdsbTrace(trace, new Date(trace.timestamp * 1000).toISOString().slice(0, 10), trace.timestamp, options);
   }
   if (options.dateIso === undefined) {
     throw new Error(`trace ${trace.icao} has no timestamp, so its date is unknown; pass the date`);
   }
 
-  return processRawAdsbTrace(trace, options.dateIso, Date.parse(`${options.dateIso}T00:00:00Z`) / 1000);
+  return processRawAdsbTrace(trace, options.dateIso, Date.parse(`${options.dateIso}T00:00:00Z`) / 1000, options);
 }
 
 /**
