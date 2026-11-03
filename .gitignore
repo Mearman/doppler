@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-cli/
+site-dist/
+*.tsbuildinfo
+.DS_Store
+coverage/
+.eslintcache
+.turbo/
+reports/
+test-results/
+playwright-report/
+.env

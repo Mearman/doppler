@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": []
+  },
+  "exclude": [],
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/browser/**/*.ts",
+    "site/client/app.tsx",
+    "site/client/solver-worker.ts",
+    "site/styles.css.ts",
+    "site/client/mantine-styles.d.ts"
+  ]
+}

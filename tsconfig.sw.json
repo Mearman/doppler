@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "lib": ["ES2024", "WebWorker"],
+    "types": []
+  },
+  "exclude": [],
+  "extends": "./tsconfig.json",
+  "include": ["site/client/sw.ts"]
+}

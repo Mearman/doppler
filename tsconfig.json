@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "esModuleInterop": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "lib": ["ES2024", "WebWorker"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedIndexedAccess": true,
+    "noUncheckedSideEffectImports": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "strictBuiltinIteratorReturn": true,
+    "target": "ES2024",
+    // No Node types and a WebWorker lib: this program is the isomorphism gate for the browser-safe runtime, so a Node-only global referenced from src/ fails to compile here rather than in a consumer's browser bundle. Tests, scripts, CLI, and Node surfaces are checked by tsconfig.node.json.
+    "types": [],
+    "verbatimModuleSyntax": true
+  },
+  "exclude": ["src/**/*.test.ts", "src/node/**/*.ts", "src/browser/**/*.ts"],
+  "include": ["src"]
+}

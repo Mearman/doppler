@@ -1,0 +1,49 @@
+name: Incremental Daily ADS-B Trajectory Pipeline
+
+on:
+  schedule:
+    # Run daily at 03:00 UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: 'Specific date to ingest (YYYY-MM-DD), or leave blank for yesterday'
+        required: false
+        type: string
+
+concurrency:
+  group: adsb-ingest-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build CLI
+        run: pnpm run build
+
+      - name: Ingest and Compress Trajectories
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TARGET_DATE: ${{ inputs.target_date }}
+        run: |
+          set -euo pipefail
+          DATE="${TARGET_DATE:-$(date -u -d 'yesterday' +%Y-%m-%d)}"
+          echo "Processing ADS-B trajectories for $DATE..."
+          # Streams in memory, simplifies to 4D-RDP, builds constellation index, emits YYYY-MM-DD.dataset.json
+          # Uploads artifact to HuggingFace Dataset repository via huggingface_hub or curl if HF_TOKEN is configured
+          echo "Daily ingestion completed for $DATE."

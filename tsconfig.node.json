@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["ES2024"],
+    "types": ["node"]
+  },
+  "exclude": [],
+  "extends": "./tsconfig.json",
+  "include": ["site/*.ts", "site/*.tsx", "cli/**/*.ts", "src/node/**/*.ts", "src/**/*.test.ts", "*.config.ts"]
+}
