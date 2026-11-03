@@ -1,0 +1,1 @@
+pnpm run typecheck && pnpm run lint:check && pnpm run test && pnpm run build

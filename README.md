@@ -77,6 +77,7 @@ Data flows through four layers inside `src/`, each importing only from the layer
 - **File suffixes decide the runner.** `*.unit.test.ts` and `*.integration.test.ts` run in Vitest. `*.browser.ts` under `site/e2e/` runs in Playwright only. Unit tests sit next to the source they test.
 - **Lint comes from `@exadev/eslint-config`.** Overrides live in `eslint.config.ts` with a reason for each. Add a files-scoped override there with a reason, not an inline `eslint-disable`. The magic-number rule is off for numerical code (`physics`, `dsp`, `solver`, tests, `site`, `cli`) and on elsewhere.
 - **Code comments** state the invariant or the reason. Public functions carry a doc comment with `@param` and `@returns`.
+- **Git hooks** are in `.husky/` and are installed by `pnpm install` (the `prepare` script). `pre-commit` lints staged `.ts` and `.tsx` files with `--fix`. `commit-msg` runs commitlint. `pre-push` runs typecheck, lint, tests and build, which is CI without the browser tests. Never bypass them with `--no-verify`: fix the failure.
 - **Commits** follow Conventional Commits. The allowed types and their release levels are the `commitTypes` list in `release.config.ts`, which `commitlint.config.ts` also reads. Every listed type releases at least a patch, `docs`, `test`, `chore` and `ci` included. `feat` releases a minor and a breaking change releases a major.
 - Use British English in prose and comments.
 
