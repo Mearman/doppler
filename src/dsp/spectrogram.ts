@@ -161,6 +161,13 @@ export function computeDopplerSpectrogram(
   const maxFreqHz = options.maxFreqHz ?? 500;
   const pollutionMarginDb = options.noisePollutionThresholdDb ?? 12;
 
+  if (!(sampleRateHz > 0)) {
+    throw new Error(`Sample rate must be positive, got ${String(sampleRateHz)} Hz`);
+  }
+  if (!Number.isInteger(hopSamples) || hopSamples < 1) {
+    throw new Error(`hopSamples must be a positive integer, got ${String(hopSamples)}`);
+  }
+
   const binStepHz = sampleRateHz / fftSize;
   const minBin = Math.max(1, Math.floor(minFreqHz / binStepHz));
   const maxBin = Math.min((fftSize >> 1) - 1, Math.ceil(maxFreqHz / binStepHz));

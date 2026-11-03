@@ -73,6 +73,10 @@ function run(): void {
     const datasetPath = datasetIdx !== -1 ? args[datasetIdx + 1] : undefined;
     const tempIdx = args.indexOf('--temp');
     const ambientTemp = tempIdx !== -1 ? Number(args[tempIdx + 1]) : 20.0;
+    if (!Number.isFinite(ambientTemp)) {
+      console.error(`Error: --temp needs a number of degrees Celsius, got ${args[tempIdx + 1] ?? 'nothing'}`);
+      process.exit(1);
+    }
     const isJson = args.includes('--json');
 
     const dataset = datasetPath !== undefined ? loadDatasetFile(datasetPath) : BUNDLED_DATASET;
