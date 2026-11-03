@@ -248,14 +248,15 @@ export class DopplerSessionEngine {
 
     if (existingObs.length === 0) {
       // Single flyover observation: find candidate segments whose speed and altitude profile match inferred kinematics
-      newHypotheses = this.spawnInitialHypotheses(obs, soundSpeedMps);
+      newHypotheses = this.spawnInitialHypotheses(obs, soundSpeedMps, allObs);
     } else if (this.session.hypotheses.length === 0) {
       // Re-seed from the constellation hash table, pairing with the latest flyover on the same clock: a time gap is meaningful only within one episode.
       const prevObs = existingObs.findLast((candidate) => candidate.episodeId === obs.episodeId);
-      newHypotheses =
-        prevObs === undefined
-          ? this.spawnInitialHypotheses(obs, soundSpeedMps)
-          : this.matchConstellations({ obsA: prevObs, obsB: obs, allObs }, soundSpeedMps);
+      newHypotheses = prevObs === undefined ? [] : this.matchConstellations({ obsA: prevObs, obsB: obs, allObs }, soundSpeedMps);
+      // The index only knows pairs that were built into the dataset, and a dataset built from real traffic holds few. With no pair to match, the new flyover seeds its own candidates exactly as a first flyover does.
+      if (newHypotheses.length === 0) {
+        newHypotheses = this.spawnInitialHypotheses(obs, soundSpeedMps, allObs);
+      }
     } else {
       // Sequentially refine existing hypotheses by fusing the new observation
       newHypotheses = this.refineExistingHypotheses(obs, soundSpeedMps);
@@ -316,6 +317,7 @@ export class DopplerSessionEngine {
   private spawnInitialHypotheses(
     obs: Readonly<DopplerObservation>,
     soundSpeedMps: number,
+    allObs: readonly Readonly<DopplerObservation>[],
   ): LocationHypothesis[] {
     const candidates: LocationHypothesis[] = [];
     const targetSpeed = obs.kinematics.inferredSpeedMps;
@@ -344,6 +346,7 @@ export class DopplerSessionEngine {
         { demGrid: this.dataset.elevationGrid, soundSpeedMps },
       );
 
+      const matches: HypothesisMatch[] = [{ observationId: obs.id, segmentId: seg.id }];
       candidates.push({
         id: `hyp_${seg.id}_${String(candidates.length + 1)}`,
         h3Cell: seg.h3Cell,
@@ -352,14 +355,14 @@ export class DopplerSessionEngine {
         lon: refined.lon,
         altMeters: refined.altMeters,
         estimatedStartEpochSec: refined.estimatedStartEpochSec,
-        logPosterior: refined.logLikelihood,
+        logPosterior: DopplerSessionEngine.scoreHypothesis(refined.logLikelihood, allObs, matches),
         probability: 0,
         rmsFreqResidualHz: refined.rmsFreqResidualHz,
         fisherInfo: refined.fisherInfo,
         ellipseSemiMajorMeters: refined.ellipseSemiMajorMeters,
         ellipseSemiMinorMeters: refined.ellipseSemiMinorMeters,
         ellipseBearingDeg: refined.ellipseBearingDeg,
-        matches: [{ observationId: obs.id, segmentId: seg.id }],
+        matches,
       });
     }
 
