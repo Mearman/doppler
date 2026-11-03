@@ -1,8 +1,7 @@
 import { z } from 'zod';
-import { type DopplerDataset, DopplerDatasetSchema, type LocationSession, LocationSessionSchema } from '../schemas';
+import { type LocationSession, LocationSessionSchema } from '../schemas';
 
 const SESSIONS_KEY = 'doppler_sessions_v1';
-const DATASET_KEY = 'doppler_custom_dataset_v1';
 
 /**
  * Saves a LocationSession snapshot into local browser storage.
@@ -59,36 +58,6 @@ export function deleteSessionFromStorage(sessionId: string): void {
 }
 
 /**
- * Saves an uploaded or synced DopplerDataset into local browser storage.
- * @param dataset - The DopplerDataset to save.
- */
-export function saveCustomDataset(dataset: Readonly<DopplerDataset>): void {
-  try {
-    localStorage.setItem(DATASET_KEY, JSON.stringify(dataset));
-  } catch (err) {
-    console.warn('Failed to save custom dataset to localStorage:', err);
-  }
-}
-
-/**
- * Loads any custom saved dataset from browser storage.
- * @returns The saved DopplerDataset, or null when nothing is stored or the stored value is not a valid dataset.
- */
-export function loadCustomDataset(): DopplerDataset | null {
-  try {
-    const raw = localStorage.getItem(DATASET_KEY);
-    if (raw === null) {
-      return null;
-    }
-    const parsed: unknown = JSON.parse(raw);
-
-    return DopplerDatasetSchema.parse(parsed);
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Exports a LocationSession as a downloadable JSON string.
  * @param session - LocationSession to export.
  * @returns Pretty-printed JSON string.
@@ -107,4 +76,32 @@ export function importSessionJson(jsonText: string): LocationSession {
   const parsed: unknown = JSON.parse(jsonText);
 
   return LocationSessionSchema.parse(parsed);
+}
+
+const LIVE_KEY_STORAGE_KEY = 'doppler_live_feed_key_v1';
+
+/**
+ * Keeps the person's own live feed API key in this browser only, never sent anywhere but the feed it belongs to.
+ * @param apiKey - The key to keep; an empty string removes it.
+ * @throws When the browser refuses the write (storage disabled or full).
+ */
+export function saveLiveFeedKey(apiKey: string): void {
+  if (apiKey === '') {
+    localStorage.removeItem(LIVE_KEY_STORAGE_KEY);
+
+    return;
+  }
+  localStorage.setItem(LIVE_KEY_STORAGE_KEY, apiKey);
+}
+
+/**
+ * Reads the kept live feed key.
+ * @returns The key, or an empty string when none is kept or storage is unavailable.
+ */
+export function loadLiveFeedKey(): string {
+  try {
+    return localStorage.getItem(LIVE_KEY_STORAGE_KEY) ?? '';
+  } catch {
+    return '';
+  }
 }

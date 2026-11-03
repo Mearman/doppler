@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DopplerDatasetSchema, DopplerObservationSchema, EnfSignatureSchema, LocationSessionSchema, SearchConstraintsSchema } from '../../src/schemas';
+import { DatasetInfoSchema, DopplerDatasetSchema, DopplerObservationSchema, EnfSignatureSchema, LocationSessionSchema, SearchConstraintsSchema } from '../../src/schemas';
 
 /**
  * The messages between the page and the solver worker, defined once so that both sides parse the same shapes.
@@ -109,7 +109,7 @@ export type AnalysisStage = (typeof ANALYSIS_STAGES)[number];
 /** A reply from the worker to the page. */
 export const WorkerReplySchema = z.union([
   z.object({ id: z.string(), success: z.literal(true), type: z.literal('progress'), stage: z.enum(ANALYSIS_STAGES) }),
-  z.object({ id: z.string(), success: z.literal(true), type: z.literal('dataset_updated') }),
+  z.object({ id: z.string(), success: z.literal(true), type: z.literal('dataset_updated'), info: DatasetInfoSchema }),
   z.object({ id: z.string(), success: z.literal(true), type: z.literal('session'), data: LocationSessionSchema }),
   z.object({ id: z.string(), success: z.literal(true), type: z.literal('audio_analysed'), data: AudioAnalysisSchema }),
   z.object({ id: z.string(), success: z.literal(false), error: z.string() }),

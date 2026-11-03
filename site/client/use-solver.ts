@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { loadSessionsFromStorage, saveSessionToStorage } from '../../src/browser/storage';
-import { type LocationSession, LocationSessionSchema } from '../../src/schemas';
-import type { DopplerObservation } from '../../src/schemas';
+import { loadDataset } from '../../src/browser/dataset-store';
+import { type DatasetInfo, type DopplerDataset, type DopplerObservation, type LocationSession, LocationSessionSchema } from '../../src/schemas';
+import { emptyDataset } from '../../src/dataset';
 import { type AnalysisStage, WorkerReplySchema } from './worker-protocol';
 import type { ClipSpectrogramData } from './spectrogram-viewer';
 
@@ -29,11 +30,14 @@ export interface Solver {
   readonly clip: ClipSpectrogramData | null;
   readonly clipSummary: ClipSummary | null;
   readonly analysis: RunningAnalysis | null;
+  /** What the worker matches flyovers against, or null before it has said. */
+  readonly datasetInfo: DatasetInfo | null;
   readonly error: string | null;
   readonly dismissError: () => void;
   readonly reportError: (message: string) => void;
   readonly startAnalysis: (request: AnalysisRequest, label: string, transfer: readonly Transferable[]) => void;
   readonly ingestObservation: (observation: Readonly<DopplerObservation>) => void;
+  readonly setDataset: (dataset: Readonly<DopplerDataset>) => void;
 }
 
 /**
@@ -46,6 +50,7 @@ export function useSolver(): Solver {
   const [clip, setClip] = useState<ClipSpectrogramData | null>(null);
   const [clipSummary, setClipSummary] = useState<ClipSummary | null>(null);
   const [analysis, setAnalysis] = useState<RunningAnalysis | null>(null);
+  const [datasetInfo, setDatasetInfo] = useState<DatasetInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const workerRef = useRef<Worker | null>(null);
 
@@ -79,7 +84,9 @@ export function useSolver(): Solver {
       setError(null);
       if (reply.type === 'session') {
         setSession(reply.data);
-      } else if (reply.type === 'audio_analysed') {
+      } else if (reply.type === 'dataset_updated') {
+        setDatasetInfo(reply.info);
+      } else {
         setClip(reply.data.spectrogram);
         setClipSummary({ observationCount: reply.data.observations.length, medianNoiseDb: reply.data.spectrogramSummary.medianNoiseDb });
         setSession(reply.data.session);
@@ -99,6 +106,18 @@ export function useSolver(): Solver {
       setSession(saved);
     }
     worker.postMessage({ id: 'init', type: 'init_session', payload: saved === undefined ? {} : { initialSession: saved } });
+    // The flight data a person loaded on an earlier visit comes back with the session.
+    loadDataset()
+      .then((stored) => {
+        if (stored !== undefined) {
+          worker.postMessage({ id: 'stored_dataset', type: 'set_dataset', payload: stored });
+        } else {
+          worker.postMessage({ id: 'no_dataset', type: 'set_dataset', payload: emptyDataset() });
+        }
+      })
+      .catch((err: unknown) => {
+        setError(`Stored flight data could not be read: ${err instanceof Error ? err.message : String(err)}`);
+      });
 
     return () => {
       worker.terminate();
@@ -115,9 +134,13 @@ export function useSolver(): Solver {
     workerRef.current?.postMessage({ id: `obs_${String(Date.now())}`, type: 'ingest_observation', payload: observation });
   }, []);
 
+  const setDataset = useCallback((dataset: Readonly<DopplerDataset>): void => {
+    workerRef.current?.postMessage({ id: `dataset_${String(Date.now())}`, type: 'set_dataset', payload: dataset });
+  }, []);
+
   const dismissError = useCallback((): void => {
     setError(null);
   }, []);
 
-  return { session, clip, clipSummary, analysis, error, dismissError, reportError: setError, startAnalysis, ingestObservation };
+  return { session, clip, clipSummary, analysis, datasetInfo, error, dismissError, reportError: setError, startAnalysis, ingestObservation, setDataset };
 }

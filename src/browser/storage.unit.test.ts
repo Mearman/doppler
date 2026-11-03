@@ -1,15 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BUNDLED_DATASET } from '../bundled';
-import type { DopplerDataset, LocationSession } from '../schemas';
+import { SYNTHETIC_DATASET } from '../test-support/synthetic-reference';
+import type { LocationSession } from '../schemas';
 import { DopplerSessionEngine } from '../solver/session';
 import {
   deleteSessionFromStorage,
   exportSessionJson,
   importSessionJson,
-  loadCustomDataset,
   loadSessionById,
   loadSessionsFromStorage,
-  saveCustomDataset,
   saveSessionToStorage,
 } from './storage';
 
@@ -48,7 +46,7 @@ describe('Browser Storage and Session Serialization', () => {
 
   const getValidTestSession = (): LocationSession => {
     const engine = new DopplerSessionEngine({
-      dataset: BUNDLED_DATASET,
+      dataset: SYNTHETIC_DATASET,
       ambientTempCelsius: 20.0,
     });
     engine.startEpisode(EPISODE_START_EPOCH_SEC);
@@ -81,22 +79,6 @@ describe('Browser Storage and Session Serialization', () => {
     expect(loadSessionById(mockSession.id)).toBeUndefined();
   });
 
-  it('saves and loads custom datasets', () => {
-    expect(loadCustomDataset()).toBeNull();
-
-    const mockDataset: DopplerDataset = {
-      version: '1.0.0',
-      generatedAtIso: '2026-03-31T12:00:00Z',
-      segments: [],
-      constellations: [],
-      elevationGrid: [],
-    };
-
-    saveCustomDataset(mockDataset);
-    const loaded = loadCustomDataset();
-    expect(loaded?.version).toBe('1.0.0');
-  });
-
   it('exports and imports sessions cleanly as JSON', () => {
     const mockSession = getValidTestSession();
     const jsonStr = exportSessionJson(mockSession);
@@ -107,12 +89,10 @@ describe('Browser Storage and Session Serialization', () => {
     expect(imported.episodes[0]?.status).toBe('active');
   });
 
-  it('treats stored values that are not valid sessions or datasets as absent', () => {
+  it('treats stored values that are not valid sessions as absent', () => {
     localStorage.setItem('doppler_sessions_v1', JSON.stringify([{ id: 'not-a-session' }]));
-    localStorage.setItem('doppler_custom_dataset_v1', JSON.stringify({ version: '1.0.0' }));
 
     expect(loadSessionsFromStorage()).toEqual([]);
-    expect(loadCustomDataset()).toBeNull();
   });
 
   it('rejects an imported session that does not match the schema', () => {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BUNDLED_DATASET } from '../../src/bundled';
+import { describeDataset, emptyDataset } from '../../src/dataset';
 import { decimateAudioStream } from '../../src/dsp/decimate';
 import { extractDopplerObservations } from '../../src/dsp/ridge-tracker';
 import { decodeWavBytes } from '../../src/dsp/wav';
@@ -29,7 +29,7 @@ const MIN_RIDGE_SNR_DB = 6;
 const DEFAULT_AMBIENT_TEMP_CELSIUS = 20;
 
 let engine: DopplerSessionEngine | null = null;
-let currentDataset: DopplerDataset = BUNDLED_DATASET;
+let currentDataset: DopplerDataset = emptyDataset();
 
 /**
  * Sends a reply to the page.
@@ -130,7 +130,7 @@ self.onmessage = (event: MessageEvent<unknown>) => {
             initialSession: engine.getSession(),
           });
         }
-        reply({ id: req.id, success: true, type: 'dataset_updated' });
+        reply({ id: req.id, success: true, type: 'dataset_updated', info: describeDataset(currentDataset) });
 
         return;
       }

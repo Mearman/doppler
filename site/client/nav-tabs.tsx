@@ -1,11 +1,12 @@
 import React from 'react';
 import * as styles from '../styles.css';
-import { FileIcon, MicIcon, SessionIcon, TargetIcon } from './icons';
+import { DatabaseIcon, FileIcon, MicIcon, SessionIcon, TargetIcon } from './icons';
 
 /** Each destination in the side panel, in the order the bar shows them. */
 export const NAV_ITEMS = [
   { id: 'listen', label: 'Listen', Icon: MicIcon },
   { id: 'file', label: 'File', Icon: FileIcon },
+  { id: 'data', label: 'Data', Icon: DatabaseIcon },
   { id: 'result', label: 'Result', Icon: TargetIcon },
   { id: 'session', label: 'Session', Icon: SessionIcon },
 ] as const;

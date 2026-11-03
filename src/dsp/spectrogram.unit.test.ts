@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUNDLED_GROUND_TRUTH, BUNDLED_SEGMENTS } from '../bundled';
+import { SYNTHETIC_GROUND_TRUTH, SYNTHETIC_SEGMENTS } from '../test-support/synthetic-reference';
 import { ANALYSIS_SAMPLE_RATE_HZ, SPECTROGRAM_FFT_SIZE, SPECTROGRAM_HOP_SAMPLES } from './constants';
 import { extractDopplerObservations } from './ridge-tracker';
 import { synthesizeMultiFlyoverAudio } from './side-channels';
@@ -48,15 +48,15 @@ const FRACTIONAL_HOP_SAMPLES = 2.5;
 
 describe('Spectrogram and Ridge Tracking', () => {
   it('detects Doppler flyover S-curves from synthesized audio and extracts observations', () => {
-    const [segment] = BUNDLED_SEGMENTS;
+    const [segment] = SYNTHETIC_SEGMENTS;
     if (segment === undefined) {
-      throw new Error('BUNDLED_SEGMENTS holds no segment');
+      throw new Error('SYNTHETIC_SEGMENTS holds no segment');
     }
     const audio = synthesizeMultiFlyoverAudio({
       sampleRateHz: ANALYSIS_SAMPLE_RATE_HZ,
       startEpochSec: RECORDING_START_EPOCH_SEC,
       durationSec: RECORDING_DURATION_SEC,
-      observer: BUNDLED_GROUND_TRUTH,
+      observer: SYNTHETIC_GROUND_TRUTH,
       flyovers: [{ segment, baseFreqHz: FLYOVER_BASE_FREQ_HZ, amplitude: FLYOVER_AMPLITUDE }],
       noiseStd: BACKGROUND_NOISE_STD,
     });

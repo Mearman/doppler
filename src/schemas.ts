@@ -280,6 +280,18 @@ export const LocationSessionSchema = define(
 export type LocationSession = z.infer<typeof LocationSessionSchema>;
 
 /**
+ * What a person needs to know about the flight data a dataset holds.
+ */
+export const DatasetInfoSchema = define(
+  z.object({
+    version: z.string().min(1),
+    generatedAtIso: z.string().min(1),
+    segmentCount: z.number().int().nonnegative(),
+  }),
+);
+export type DatasetInfo = z.infer<typeof DatasetInfoSchema>;
+
+/**
  * Portable dataset bundle containing 4D-RDP trajectory segments, constellation hash index, and elevation tiles.
  */
 export const DopplerDatasetSchema = define(
