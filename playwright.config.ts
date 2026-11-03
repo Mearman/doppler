@@ -10,7 +10,12 @@ export default defineConfig({
   testDir: './site/e2e',
   testMatch: '**/*.browser.ts',
   fullyParallel: true,
-  use: { baseURL: `http://localhost:${String(PORT)}/` },
+  use: {
+    baseURL: `http://localhost:${String(PORT)}/`,
+    launchOptions: {
+      args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+    },
+  },
   webServer: {
     command: 'tsx site/e2e/serve.ts',
     url: `http://localhost:${String(PORT)}/`,

@@ -4,6 +4,7 @@ import { MantineProvider, Button, Group, Text, Badge, Card, Stack, Tabs, Progres
 import '@mantine/core/styles.css';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import { MicMonitor } from '../../src/browser/mic-monitor';
 import { BUNDLED_GROUND_TRUTH, generateBundledReferenceAudio } from '../../src/bundled';
 import { decodeWavBytes } from '../../src/dsp/side-channels';
 import type { LocationHypothesis, LocationSession } from '../../src/schemas';
@@ -24,6 +25,33 @@ export function App(): React.JSX.Element {
   const markersLayer = useRef<L.LayerGroup | null>(null);
   const ellipseLayer = useRef<L.LayerGroup | null>(null);
   const workerRef = useRef<Worker | null>(null);
+  const micMonitorRef = useRef<MicMonitor | null>(null);
+
+  useEffect(() => {
+    const monitor = new MicMonitor({
+      onNoiseUpdate: (noiseDb, isPolluted) => {
+        setNoiseFloorDb(noiseDb);
+        setIsNoisePolluted(isPolluted);
+      },
+      onObservationDetected: (observation) => {
+        setStatusMessage(`Captured aircraft flyover at ${observation.cpaTimeSec.toFixed(1)}s! Refining location...`);
+        workerRef.current?.postMessage({
+          id: `obs_${String(Date.now())}`,
+          type: 'ingest_observation',
+          payload: observation,
+        });
+      },
+      onError: (err) => {
+        setStatusMessage(`Microphone error: ${err.message}`);
+        setIsListening(false);
+      },
+    });
+    micMonitorRef.current = monitor;
+
+    return () => {
+      monitor.stop();
+    };
+  }, []);
 
   useEffect(() => {
     // Instantiate background solver worker
@@ -162,6 +190,43 @@ export function App(): React.JSX.Element {
     leafletMap.current.setView([topHyp.lat, topHyp.lon], 13);
   }, [session]);
 
+  const handleToggleMic = async (): Promise<void> => {
+    if (isListening) {
+      micMonitorRef.current?.stop();
+      setIsListening(false);
+      setIsPaused(false);
+      setStatusMessage('Microphone stopped.');
+    } else {
+      setStatusMessage('Requesting microphone permissions (raw acoustics, AGC/noise-suppression disabled)...');
+      try {
+        const episodeId = `live_${String(Date.now())}`;
+        await micMonitorRef.current?.start(episodeId);
+        setIsListening(true);
+        setIsPaused(false);
+        setStatusMessage('Live microphone listening active. Silence gating and Doppler ridge tracker running.');
+      } catch (err) {
+        setIsListening(false);
+        const msg = err instanceof Error ? err.message : String(err);
+        setStatusMessage(`Microphone permission / access error: ${msg}`);
+      }
+    }
+  };
+
+  const handleTogglePause = (): void => {
+    if (!isListening) {
+      return;
+    }
+    if (isPaused) {
+      micMonitorRef.current?.resume();
+      setIsPaused(false);
+      setStatusMessage('Microphone resumed.');
+    } else {
+      micMonitorRef.current?.pause();
+      setIsPaused(true);
+      setStatusMessage('Microphone paused (silence interval preserved).');
+    }
+  };
+
   // Simulate a live flyover stream for testing/demonstration without physical mic
   const handleSimulateFlyoverStream = (): void => {
     setStatusMessage('Synthesizing & analyzing 1,120s multi-flyover stream (Doppler ridges + 50Hz ENF)...');
@@ -251,7 +316,7 @@ export function App(): React.JSX.Element {
                     <Button
                       size="xs"
                       color={isListening ? 'red' : 'blue'}
-                      onClick={() => { setIsListening(!isListening); }}
+                      onClick={() => { void handleToggleMic(); }}
                     >
                       {isListening ? 'Stop Mic' : 'Start Mic'}
                     </Button>
@@ -259,7 +324,7 @@ export function App(): React.JSX.Element {
                       size="xs"
                       variant="light"
                       disabled={!isListening}
-                      onClick={() => { setIsPaused(!isPaused); }}
+                      onClick={handleTogglePause}
                     >
                       {isPaused ? 'Resume' : 'Pause'}
                     </Button>

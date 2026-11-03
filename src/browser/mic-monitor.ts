@@ -35,6 +35,8 @@ export class MicMonitor {
 
   private episodeStartEpochSec = 0;
 
+  private actualSampleRateHz = 48000;
+
   private readonly callbacks: MicMonitorCallbacks;
 
   constructor(callbacks: MicMonitorCallbacks = {}) {
@@ -61,15 +63,14 @@ export class MicMonitor {
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false,
-          channelCount: 1,
-          sampleRate: 48000,
         },
       });
 
-      this.audioCtx = new AudioContext({ sampleRate: 48000 });
+      this.audioCtx = new AudioContext();
+      this.actualSampleRateHz = this.audioCtx.sampleRate;
       const source = this.audioCtx.createMediaStreamSource(this.mediaStream);
 
-      // 4096-sample chunks at 48kHz = ~85ms buffer
+      // 4096-sample chunks = ~85ms buffer at 48 kHz
       this.processorNode = this.audioCtx.createScriptProcessor(4096, 1, 1);
       this.processorNode.onaudioprocess = (e) => {
         if (!this.isListening || this.isPaused) {
@@ -131,7 +132,7 @@ export class MicMonitor {
    * Processes a raw 48 kHz chunk, decimates it to 2,000 Hz, appends it to the rolling window, and checks for Doppler ridges.
    */
   private handleRawAudioChunk(rawChunk: Float32Array): void {
-    const decimated = decimateAudioStream(rawChunk, 48000, 2000);
+    const decimated = decimateAudioStream(rawChunk, this.actualSampleRateHz, 2000);
     const newBuf = new Float32Array(this.sampleBuffer.length + decimated.samples.length);
     newBuf.set(this.sampleBuffer, 0);
     newBuf.set(decimated.samples, this.sampleBuffer.length);

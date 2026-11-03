@@ -25,4 +25,20 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     // Expect status message or hypothesis card to appear
     await expect(page.locator('text=Estimated Location')).toBeVisible({ timeout: 30000 });
   });
+
+  test('requests microphone permission when Start Mic is clicked', async ({ page, context }) => {
+    await context.grantPermissions(['microphone']);
+    await page.goto('/');
+
+    const micButton = page.locator('button:has-text("Start Mic")');
+    await expect(micButton).toBeVisible();
+    await micButton.click();
+
+    // Button transitions to "Stop Mic"
+    await expect(page.locator('button:has-text("Stop Mic")')).toBeVisible({ timeout: 10000 });
+
+    // Stop mic
+    await page.locator('button:has-text("Stop Mic")').click();
+    await expect(page.locator('button:has-text("Start Mic")')).toBeVisible({ timeout: 10000 });
+  });
 });
