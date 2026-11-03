@@ -112,6 +112,15 @@ ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
             session,
             observations,
             enf,
+            spectrogram: {
+              minFreqHz: spectrogram.minFreqHz,
+              maxFreqHz: spectrogram.maxFreqHz,
+              binStepHz: spectrogram.binStepHz,
+              minBin: spectrogram.minBin,
+              maxBin: spectrogram.maxBin,
+              overallMedianNoiseDb: spectrogram.overallMedianNoiseDb,
+              frames: spectrogram.frames,
+            },
             spectrogramSummary: {
               frameCount: spectrogram.frames.length,
               quietIntervalsCount: spectrogram.quietIntervals.length,

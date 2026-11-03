@@ -1,13 +1,18 @@
 import { decimateAudioStream } from '../dsp/decimate';
 import { extractDopplerObservations } from '../dsp/ridge-tracker';
-import { computeDopplerSpectrogram, type DopplerSpectrogram, type SpectrogramFrame } from '../dsp/spectrogram';
+import {
+  computeDopplerSpectrogram,
+  computeSingleSpectrogramFrame,
+  type ComputedSingleFrame,
+  type DopplerSpectrogram,
+} from '../dsp/spectrogram';
 import type { DopplerObservation } from '../schemas';
 
 /**
  * Event callbacks emitted during continuous or episodic microphone listening.
  */
 export interface MicMonitorCallbacks {
-  readonly onSpectrogramFrame?: (frame: Readonly<SpectrogramFrame>) => void;
+  readonly onSpectrogramFrame?: (frame: Readonly<ComputedSingleFrame>) => void;
   readonly onNoiseUpdate?: (noiseFloorDb: number, noisePolluted: boolean) => void;
   readonly onObservationDetected?: (observation: Readonly<DopplerObservation>) => void;
   readonly onError?: (error: Readonly<Error>) => void;
@@ -144,6 +149,22 @@ export class MicMonitor {
       this.sampleBuffer = this.sampleBuffer.slice(this.sampleBuffer.length - maxWindowSamples);
     }
 
+    // Emit live single-frame STFT for real-time waterfall display
+    if (this.sampleBuffer.length >= 2048) {
+      const windowSlice = this.sampleBuffer.subarray(this.sampleBuffer.length - 2048);
+      const frameTimeSec = this.episodeStartEpochSec + this.sampleBuffer.length / 2000;
+      const liveFrame = computeSingleSpectrogramFrame(windowSlice, {
+        sampleRateHz: 2000,
+        fftSize: 2048,
+        minFreqHz: 50,
+        maxFreqHz: 500,
+        timeSec: frameTimeSec,
+      });
+
+      this.callbacks.onSpectrogramFrame?.(liveFrame);
+      this.callbacks.onNoiseUpdate?.(liveFrame.medianNoiseFloorDb, liveFrame.noisePolluted);
+    }
+
     // Every ~2 seconds of audio, compute spectrogram and extract candidate ridges
     if (this.sampleBuffer.length >= 8000) {
       const spectrogram: DopplerSpectrogram = computeDopplerSpectrogram(this.sampleBuffer, {
@@ -152,12 +173,6 @@ export class MicMonitor {
         fftSize: 2048,
         hopSamples: 500,
       });
-
-      const lastFrame = spectrogram.frames[spectrogram.frames.length - 1];
-      if (lastFrame !== undefined) {
-        this.callbacks.onSpectrogramFrame?.(lastFrame);
-        this.callbacks.onNoiseUpdate?.(lastFrame.medianNoiseFloorDb, lastFrame.noisePolluted);
-      }
 
       const observations = extractDopplerObservations(spectrogram, {
         episodeId: this.episodeId,

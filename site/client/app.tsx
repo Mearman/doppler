@@ -1,14 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MantineProvider, Button, Group, Text, Badge, Card, Stack, Tabs, Progress } from '@mantine/core';
+import { Badge, Button, Card, Group, MantineProvider, Progress, Stack, Tabs, Text } from '@mantine/core';
 import '@mantine/core/styles.css';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { MicMonitor } from '../../src/browser/mic-monitor';
 import { BUNDLED_GROUND_TRUTH, generateBundledReferenceAudio } from '../../src/bundled';
 import { decodeWavBytes } from '../../src/dsp/side-channels';
+import type { ComputedSingleFrame } from '../../src/dsp/spectrogram';
 import type { LocationHypothesis, LocationSession } from '../../src/schemas';
 import * as styles from '../styles.css';
+import { SpectrogramViewer, type ClipSpectrogramData } from './spectrogram-viewer';
 
 export function App(): React.JSX.Element {
   const [session, setSession] = useState<LocationSession | null>(null);
@@ -19,6 +21,8 @@ export function App(): React.JSX.Element {
   const [isNoisePolluted, setIsNoisePolluted] = useState(false);
   const [activeFlyoverCount, setActiveFlyoverCount] = useState(0);
   const [statusMessage, setStatusMessage] = useState('Offline Ready. Select an audio file or start live listening.');
+  const [liveFrames, setLiveFrames] = useState<ComputedSingleFrame[]>([]);
+  const [clipSpectrogram, setClipSpectrogram] = useState<ClipSpectrogramData | null>(null);
 
   const mapRef = useRef<HTMLDivElement | null>(null);
   const leafletMap = useRef<L.Map | null>(null);
@@ -29,6 +33,14 @@ export function App(): React.JSX.Element {
 
   useEffect(() => {
     const monitor = new MicMonitor({
+      onSpectrogramFrame: (frame) => {
+        setLiveFrames((prev) => {
+          const next = prev.length >= 350 ? prev.slice(prev.length - 349) : [...prev];
+          next.push(frame);
+
+          return next;
+        });
+      },
       onNoiseUpdate: (noiseDb, isPolluted) => {
         setNoiseFloorDb(noiseDb);
         setIsNoisePolluted(isPolluted);
@@ -68,8 +80,12 @@ export function App(): React.JSX.Element {
       const data = res.data as {
         session?: LocationSession;
         observations?: unknown[];
+        spectrogram?: ClipSpectrogramData;
         spectrogramSummary?: { medianNoiseDb: number };
       };
+      if (data.spectrogram !== undefined) {
+        setClipSpectrogram(data.spectrogram);
+      }
       if (data.session !== undefined) {
         setSession(data.session);
         if (data.observations !== undefined) {
@@ -199,6 +215,7 @@ export function App(): React.JSX.Element {
     } else {
       setStatusMessage('Requesting microphone permissions (raw acoustics, AGC/noise-suppression disabled)...');
       try {
+        setClipSpectrogram(null);
         const episodeId = `live_${String(Date.now())}`;
         await micMonitorRef.current?.start(episodeId);
         setIsListening(true);
@@ -452,8 +469,19 @@ export function App(): React.JSX.Element {
           </Text>
         </aside>
 
-        <main className={styles.mapPanel}>
-          <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
+        <main className={styles.visualizerPanel}>
+          <div className={styles.mapContainer}>
+            <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
+          </div>
+          <SpectrogramViewer
+            clipSpectrogram={clipSpectrogram}
+            isListening={isListening}
+            liveFrames={liveFrames}
+            observations={session?.observations ?? []}
+            onClearLive={() => {
+              setLiveFrames([]);
+            }}
+          />
         </main>
       </div>
     </div>

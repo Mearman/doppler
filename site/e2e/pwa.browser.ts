@@ -11,9 +11,11 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     await expect(page.locator('text=Aircraft Acoustic Geolocation')).toBeVisible();
     await expect(page.locator('text=100% Offline')).toBeVisible();
 
-    // Map container exists
+    // Map container and Spectrogram canvas exist
     const map = page.locator('.leaflet-container');
     await expect(map).toBeVisible();
+    await expect(page.locator('text=Acoustic Spectrogram & Waterfall')).toBeVisible();
+    await expect(page.locator('canvas')).toBeVisible();
 
     // Live Monitor tab has simulation button
     const simButton = page.locator('button:has-text("Simulate Flyover Stream")');
@@ -22,11 +24,13 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     // Click simulate flyover stream
     await simButton.click();
 
-    // Expect status message or hypothesis card to appear
+    // Expect status message, hypothesis card, and spectrogram flyover detection to appear
     await expect(page.locator('text=Estimated Location')).toBeVisible({ timeout: 30000 });
+    await expect(page.locator('text=Audio Clip Analysis')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=Flyover Track(s) Detected')).toBeVisible({ timeout: 10000 });
   });
 
-  test('requests microphone permission when Start Mic is clicked', async ({ page, context }) => {
+  test('requests microphone permission when Start Mic is clicked and activates live spectrogram waterfall', async ({ page, context }) => {
     await context.grantPermissions(['microphone']);
     await page.goto('/');
 
@@ -34,8 +38,9 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     await expect(micButton).toBeVisible();
     await micButton.click();
 
-    // Button transitions to "Stop Mic"
+    // Button transitions to "Stop Mic" and live spectrogram badge is displayed
     await expect(page.locator('button:has-text("Stop Mic")')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=● Live Microphone')).toBeVisible({ timeout: 10000 });
 
     // Stop mic
     await page.locator('button:has-text("Stop Mic")').click();

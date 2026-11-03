@@ -44,6 +44,28 @@ export interface SpectrogramOptions {
 }
 
 /**
+ * Options for computing an isolated single STFT frame.
+ */
+export interface SingleFrameOptions {
+  readonly sampleRateHz: number;
+  readonly fftSize?: number;
+  readonly minFreqHz?: number;
+  readonly maxFreqHz?: number;
+  readonly timeSec?: number;
+  readonly noisePollutionThresholdDb?: number;
+  readonly baselineNoiseDb?: number;
+}
+
+/**
+ * Result of computing an isolated single STFT frame, including bin boundaries and frequency step.
+ */
+export interface ComputedSingleFrame extends SpectrogramFrame {
+  readonly minBin: number;
+  readonly maxBin: number;
+  readonly binStepHz: number;
+}
+
+/**
  * Computes the median value of a numeric slice without mutating the source buffer.
  */
 function medianOfSlice(values: Readonly<Float64Array>, start: number, end: number): number {
@@ -61,6 +83,64 @@ function medianOfSlice(values: Readonly<Float64Array>, start: number, end: numbe
   const mid = slice.length >> 1;
 
   return slice[mid] ?? -120;
+}
+
+/**
+ * Computes an isolated single STFT spectrogram frame over a single time window.
+ * @param windowSlice - Time-domain audio slice (length must match fftSize).
+ * @param options - Single frame computation options.
+ * @returns Computed STFT frame, peak tracking values, and frequency bin parameters.
+ */
+export function computeSingleSpectrogramFrame(
+  windowSlice: Readonly<Float32Array>,
+  options: Readonly<SingleFrameOptions>,
+): ComputedSingleFrame {
+  const sampleRateHz = options.sampleRateHz;
+  const fftSize = options.fftSize ?? 2048;
+  const minFreqHz = options.minFreqHz ?? 65;
+  const maxFreqHz = options.maxFreqHz ?? 500;
+  const timeSec = options.timeSec ?? 0;
+  const pollutionMarginDb = options.noisePollutionThresholdDb ?? 12;
+  const baselineNoiseDb = options.baselineNoiseDb ?? -80;
+
+  const binStepHz = sampleRateHz / fftSize;
+  const minBin = Math.max(1, Math.floor(minFreqHz / binStepHz));
+  const maxBin = Math.min((fftSize >> 1) - 1, Math.ceil(maxFreqHz / binStepHz));
+
+  const fullSpectrumDb = computeHannPowerSpectrumDb(windowSlice, fftSize);
+  const medianNoiseFloorDb = medianOfSlice(fullSpectrumDb, minBin, maxBin);
+
+  let bestBin = minBin;
+  let bestPowerDb = -Infinity;
+  for (let b = minBin; b <= maxBin; b += 1) {
+    const p = fullSpectrumDb[b] ?? -Infinity;
+    if (p > bestPowerDb) {
+      bestPowerDb = p;
+      bestBin = b;
+    }
+  }
+
+  // Parabolic sub-bin interpolation around bestBin
+  const leftDb = fullSpectrumDb[bestBin - 1] ?? bestPowerDb;
+  const rightDb = fullSpectrumDb[bestBin + 1] ?? bestPowerDb;
+  const denom = leftDb - 2 * bestPowerDb + rightDb;
+  const deltaBin = Math.abs(denom) > 1e-9 ? Math.max(-0.5, Math.min(0.5, (0.5 * (leftDb - rightDb)) / denom)) : 0;
+  const peakFreqHz = (bestBin + deltaBin) * binStepHz;
+  const peakSnrDb = bestPowerDb - medianNoiseFloorDb;
+  const bandPowerDb = fullSpectrumDb.slice(minBin, maxBin + 1);
+
+  return {
+    timeSec,
+    powerDb: bandPowerDb,
+    medianNoiseFloorDb,
+    peakFreqHz,
+    peakPowerDb: bestPowerDb,
+    peakSnrDb,
+    noisePolluted: medianNoiseFloorDb > baselineNoiseDb + pollutionMarginDb,
+    minBin,
+    maxBin,
+    binStepHz,
+  };
 }
 
 /**
@@ -85,49 +165,19 @@ export function computeDopplerSpectrogram(
   const minBin = Math.max(1, Math.floor(minFreqHz / binStepHz));
   const maxBin = Math.min((fftSize >> 1) - 1, Math.ceil(maxFreqHz / binStepHz));
 
-  const rawFrames: {
-    readonly timeSec: number;
-    readonly bandPowerDb: Float64Array;
-    readonly medianNoiseFloorDb: number;
-    readonly peakFreqHz: number;
-    readonly peakPowerDb: number;
-    readonly peakSnrDb: number;
-  }[] = [];
+  const rawFrames: ComputedSingleFrame[] = [];
 
   for (let offset = 0; offset + fftSize <= samples.length; offset += hopSamples) {
     const windowSlice = samples.subarray(offset, offset + fftSize);
-    const fullSpectrumDb = computeHannPowerSpectrumDb(windowSlice, fftSize);
-    const medianNoiseFloorDb = medianOfSlice(fullSpectrumDb, minBin, maxBin);
-
-    let bestBin = minBin;
-    let bestPowerDb = -Infinity;
-    for (let b = minBin; b <= maxBin; b += 1) {
-      const p = fullSpectrumDb[b] ?? -Infinity;
-      if (p > bestPowerDb) {
-        bestPowerDb = p;
-        bestBin = b;
-      }
-    }
-
-    // Parabolic sub-bin interpolation around bestBin
-    const leftDb = fullSpectrumDb[bestBin - 1] ?? bestPowerDb;
-    const rightDb = fullSpectrumDb[bestBin + 1] ?? bestPowerDb;
-    const denom = leftDb - 2 * bestPowerDb + rightDb;
-    const deltaBin = Math.abs(denom) > 1e-9 ? Math.max(-0.5, Math.min(0.5, (0.5 * (leftDb - rightDb)) / denom)) : 0;
-    const peakFreqHz = (bestBin + deltaBin) * binStepHz;
-    const peakSnrDb = bestPowerDb - medianNoiseFloorDb;
-
-    const bandPowerDb = fullSpectrumDb.slice(minBin, maxBin + 1);
     const frameTimeSec = startTimeSec + (offset + fftSize / 2) / sampleRateHz;
-
-    rawFrames.push({
+    const frame = computeSingleSpectrogramFrame(windowSlice, {
+      sampleRateHz,
+      fftSize,
+      minFreqHz,
+      maxFreqHz,
       timeSec: frameTimeSec,
-      bandPowerDb,
-      medianNoiseFloorDb,
-      peakFreqHz,
-      peakPowerDb: bestPowerDb,
-      peakSnrDb,
     });
+    rawFrames.push(frame);
   }
 
   const floorList = rawFrames.map((f) => f.medianNoiseFloorDb).sort((a, b) => a - b);
@@ -136,7 +186,7 @@ export function computeDopplerSpectrogram(
 
   const frames: SpectrogramFrame[] = rawFrames.map((f) => ({
     timeSec: f.timeSec,
-    powerDb: f.bandPowerDb,
+    powerDb: f.powerDb,
     medianNoiseFloorDb: f.medianNoiseFloorDb,
     peakFreqHz: f.peakFreqHz,
     peakPowerDb: f.peakPowerDb,
