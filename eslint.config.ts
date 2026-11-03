@@ -26,7 +26,7 @@ export default defineConfig(
   },
   {
     // Schema definitions export matching value-type pairs and validation boundaries (min/max geodetic ranges).
-    files: ['src/schemas.ts'],
+    files: ['src/schemas.ts', 'src/node/stream-adsb.ts'],
     rules: {
       '@typescript-eslint/no-magic-numbers': 'off',
       '@typescript-eslint/no-redeclare': 'off',
@@ -52,6 +52,11 @@ export default defineConfig(
     rules: {
       '@typescript-eslint/no-magic-numbers': 'off',
     },
+  },
+  {
+    // A tar stream is consumed strictly in order: each header's size says where the next begins, so reads cannot be issued concurrently.
+    files: ['src/node/tar-stream.ts', 'src/node/adsb-archive.ts'],
+    rules: { 'no-await-in-loop': 'off' },
   },
   {
     // Test assertions and fixtures frequently check known array elements and mock data.

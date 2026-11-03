@@ -2,7 +2,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { decodeWavBytes, encodeWavPcm16 } from '../dsp/wav';
 
 export * from '../index';
+export * from './adsb-archive';
 export * from './stream-adsb';
+export * from './tar-stream';
 
 /**
  * Reads and decodes a WAV audio file from disk into mono `Float32Array` samples and sample rate.
