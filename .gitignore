@@ -14,3 +14,8 @@ fixtures/*.wav
 fixtures/*.m4a
 fixtures/*.mp3
 .env
+
+!CLAUDE.md
+!AGENTS.md
+!**/CLAUDE.md
+!**/AGENTS.md
