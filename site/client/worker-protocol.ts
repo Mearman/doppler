@@ -47,6 +47,17 @@ const ProcessAudioRequestSchema = z.object({
   }),
 });
 
+/** Analyses a WAV file's bytes, decoding them in the worker so that a long recording does not block the page. `bytes` is transferred to the worker rather than copied. */
+const ProcessWavRequestSchema = z.object({
+  id: z.string(),
+  type: z.literal('process_wav'),
+  payload: z.object({
+    bytes: z.custom<ArrayBuffer>((value) => value instanceof ArrayBuffer),
+    startEpochSec: z.number(),
+    episodeId: z.string(),
+  }),
+});
+
 /** A request from the page to the worker. */
 export const WorkerRequestSchema = z.discriminatedUnion('type', [
   SetDatasetRequestSchema,
@@ -54,6 +65,7 @@ export const WorkerRequestSchema = z.discriminatedUnion('type', [
   UpdateConstraintsRequestSchema,
   IngestObservationRequestSchema,
   ProcessAudioRequestSchema,
+  ProcessWavRequestSchema,
 ]);
 export type WorkerRequest = z.infer<typeof WorkerRequestSchema>;
 
@@ -90,8 +102,13 @@ const AudioAnalysisSchema = z.object({
 });
 export type AudioAnalysis = z.infer<typeof AudioAnalysisSchema>;
 
+/** The stages of an audio analysis in the order the worker runs them, so a reply names how far along it is. */
+export const ANALYSIS_STAGES = ['decoding', 'decimating', 'spectrogram', 'tracking', 'locating'] as const;
+export type AnalysisStage = (typeof ANALYSIS_STAGES)[number];
+
 /** A reply from the worker to the page. */
 export const WorkerReplySchema = z.union([
+  z.object({ id: z.string(), success: z.literal(true), type: z.literal('progress'), stage: z.enum(ANALYSIS_STAGES) }),
   z.object({ id: z.string(), success: z.literal(true), type: z.literal('dataset_updated') }),
   z.object({ id: z.string(), success: z.literal(true), type: z.literal('session'), data: LocationSessionSchema }),
   z.object({ id: z.string(), success: z.literal(true), type: z.literal('audio_analysed'), data: AudioAnalysisSchema }),
