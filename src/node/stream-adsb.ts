@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, openSync, readdirSync, readFileSync, statSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { define } from '../define';
@@ -47,6 +47,11 @@ export interface AdsbTraceOptions {
 
 /** Altitude above which a ping is cruise traffic that the microphone is not expected to hear: 20,000 ft. */
 const MAX_AUDIBLE_ALTITUDE_METERS = 6096;
+
+/**
+ * Ground speed, in m/s (about 195 knots), above which a segment of an aircraft whose type is not classified is dropped. Light propeller aircraft and helicopters seldom exceed it (about 2 percent of their segments in a sample of real traces), whereas most unclassified types are airliners that fly faster than this below 20,000 ft (about 56 percent of theirs) and have no narrowband propeller tone to match.
+ */
+const MAX_UNCLASSIFIED_SPEED_MPS = 100;
 
 /** Metres in a foot. */
 const METERS_PER_FOOT = 0.3048;
@@ -136,9 +141,11 @@ export function processRawAdsbTrace(
   }
   endRun();
 
-  return runs.flatMap((pings) =>
-    simplifyTrajectory4D(pings, { flightId: trace.r ?? trace.icao, icao24: trace.icao, typeCode, category, dateIso }, options.toleranceMeters ?? SLANT_SIGMA_FLOOR_METERS / 2),
-  );
+  return runs
+    .flatMap((pings) =>
+      simplifyTrajectory4D(pings, { flightId: trace.r ?? trace.icao, icao24: trace.icao, typeCode, category, dateIso }, options.toleranceMeters ?? SLANT_SIGMA_FLOOR_METERS / 2),
+    )
+    .filter((segment) => category !== 'unknown' || segment.groundspeedMps <= MAX_UNCLASSIFIED_SPEED_MPS);
 }
 
 /** Options for reading ADS-B input. */
@@ -210,8 +217,20 @@ export function loadDatasetFile(filePath: string): DopplerDataset {
   return DopplerDataset.parse(parsed);
 }
 
+/** Items serialised per write, so no single string approaches the engine's string length limit however large the dataset. */
+const WRITE_BATCH_ITEMS = 5000;
+
+function writeJsonArray(fd: number, items: readonly unknown[]): void {
+  writeSync(fd, '[');
+  for (let start = 0; start < items.length; start += WRITE_BATCH_ITEMS) {
+    const batch = items.slice(start, start + WRITE_BATCH_ITEMS).map((item) => JSON.stringify(item)).join(',');
+    writeSync(fd, start === 0 ? batch : `,${batch}`);
+  }
+  writeSync(fd, ']');
+}
+
 /**
- * Serializes and saves a DopplerDataset to disk with built constellation index.
+ * Serializes and saves a DopplerDataset to disk with built constellation index. The file is compact JSON written in batches, because a day of real traffic is hundreds of thousands of segments and one `JSON.stringify` of that overflows the string length limit.
  * @param filePath - Output path.
  * @param segments - Array of linear flight segments.
  * @param demGrid - Optional DEM elevation grid points.
@@ -231,7 +250,18 @@ export function saveDatasetBundle(
     elevationGrid: demGrid,
   };
 
-  writeFileSync(filePath, JSON.stringify(dataset, null, 2), 'utf8');
+  const fd = openSync(filePath, 'w');
+  try {
+    writeSync(fd, `{"version":${JSON.stringify(dataset.version)},"generatedAtIso":${JSON.stringify(dataset.generatedAtIso)},"segments":`);
+    writeJsonArray(fd, segments);
+    writeSync(fd, ',"constellations":');
+    writeJsonArray(fd, constellations);
+    writeSync(fd, ',"elevationGrid":');
+    writeJsonArray(fd, demGrid);
+    writeSync(fd, '}');
+  } finally {
+    closeSync(fd);
+  }
 
   return dataset;
 }
