@@ -15,7 +15,7 @@ export default defineConfig(
   { ...js.configs.recommended, files: ['**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'] },
   ...exadev,
   {
-    // Subpath exports doppler/node and doppler/browser export their public surface.
+    // Subpath exports @mearman/doppler/node and @mearman/doppler/browser export their public surface.
     rules: {
       'exadev/barrel-policy': ['error', { mode: 'single', entries: ['src/node/entry.ts', 'src/browser/entry.ts'] }],
     },

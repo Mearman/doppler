@@ -56,7 +56,7 @@ CI (`.github/workflows/ci.yml`) runs, in order: typecheck, lint, tests, build, `
 The repository has four consumers of one core:
 
 - **`src/`** is the isomorphic core. It must run in Node, browsers and Web Workers. `tsconfig.json` sets `types: []` with a `WebWorker` lib, so a Node-only global in `src/` fails to compile there. It excludes `src/node/`, `src/browser/` and `*.test.ts`, which other tsconfig projects check.
-- **`src/node/`** and **`src/browser/`** are the platform edges (file system, ADS-B streaming, microphone capture, `localStorage` session storage). Each has an `entry.ts` that re-exports `src/index.ts` plus its own surface. These are the package exports `doppler`, `doppler/node` and `doppler/browser`.
+- **`src/node/`** and **`src/browser/`** are the platform edges (file system, ADS-B streaming, microphone capture, `localStorage` session storage). Each has an `entry.ts` that re-exports `src/index.ts` plus its own surface. These are the package exports `@mearman/doppler`, `@mearman/doppler/node` and `@mearman/doppler/browser`.
 - **`cli/doppler.ts`** is the CLI. It imports from `../src` directly and is bundled to `dist-cli/doppler.mjs`, the package `bin`.
 - **`site/`** is the PWA. `site/build.ts` bundles `site/client/app.tsx`, the solver Web Worker and the service worker with esbuild. `site/build-site.ts` writes `index.html`, the manifest and `precache.json`. `site/precache.ts` appends a SHA-256 digest of the precached files to the manifest version, so the service worker refreshes its cache whenever any precached byte changes.
 
@@ -85,7 +85,7 @@ Data flows through four layers inside `src/`, each importing only from the layer
 
 - **External fixture audio is not in git.** `fixtures/*.wav`, `*.m4a` and `*.mp3` are gitignored (the full recording is about 300 MB). Tests against downloaded fixtures guard with `if (!existsSync(path)) { return; }`, while a built-in synthetic benchmark executes and verifies the complete inversion pipeline in CI and clean checkouts. Put recordings in `fixtures/` for full offline forensics verification.
 - **`pnpm test:e2e` needs a free port 4174** and does not reuse a running server (`reuseExistingServer: false`). Chromium runs with fake audio devices so that the microphone permission prompt does not block.
-- **The CLI bundle does not depend on `dist/`.** `tsdown.config.ts` marks `doppler` and `doppler/node` external for the CLI, but `cli/doppler.ts` imports `../src` directly, so the two builds are independent.
+- **The CLI bundle does not depend on `dist/`.** `tsdown.config.ts` marks `@mearman/doppler` and `@mearman/doppler/node` external for the CLI, but `cli/doppler.ts` imports `../src` directly, so the two builds are independent.
 - **The CLI version is read from `package.json`** via `import.meta.url`, ensuring CLI output (`doppler -v`) stays synchronized with semantic-release without hardcoded literals.
 - **`incremental-adsb.yml` builds a day's dataset but does not publish it.** It streams the `adsb.lol` `globe_history` release for the target day through `doppler ingest --input -` and writes `YYYY-MM-DD.dataset.json` on the runner. Where the file is stored is not configured yet.
 - **Real ADS-B data enters through `doppler ingest`.** It accepts a raw `adsb.lol` or `tar1090` trace file, a directory of them, ready-made segments, or (`--input -`) the day's tar on standard input, with `--bbox` to keep one region. Without `--dataset`, `locate` and the PWA match against the three synthetic flyovers in `src/bundled.ts` only.

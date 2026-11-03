@@ -16,7 +16,7 @@ export default defineConfig([
     dts: false,
     platform: 'node',
     outDir: 'dist-cli',
-    deps: { neverBundle: ['doppler', 'doppler/node'] },
+    deps: { neverBundle: ['@mearman/doppler', '@mearman/doppler/node'] },
     clean: true,
   },
 ]);
