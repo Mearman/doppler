@@ -2,6 +2,12 @@ import { expect, test } from '@playwright/test';
 import { generateBundledReferenceAudio } from '../../src/bundled';
 import { encodeWavPcm16 } from '../../src/dsp/wav';
 
+interface Box {
+  readonly width: number;
+  readonly height: number;
+  readonly top: number;
+}
+
 test.describe('Doppler PWA Offline Geolocation', () => {
   test('renders header, tabs, and Leaflet map', async ({ page }) => {
     page.on('console', (msg) => { console.log('PAGE LOG:', msg.text()); });
@@ -16,7 +22,7 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     // Map container and Spectrogram canvas exist
     const map = page.locator('.leaflet-container');
     await expect(map).toBeVisible();
-    await expect(page.locator('text=Acoustic Spectrogram & Waterfall')).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Spectrogram' })).toBeVisible();
     await expect(page.locator('canvas')).toBeVisible();
 
     // Live Monitor tab has simulation button
@@ -27,9 +33,9 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     await simButton.click();
 
     // Expect status message, hypothesis card, and spectrogram flyover detection to appear
-    await expect(page.locator('text=Estimated Location')).toBeVisible({ timeout: 30000 });
-    await expect(page.locator('text=Audio Clip Analysis')).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('text=Flyover Track(s) Detected')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('Estimated location')).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText('Clip analysis', { exact: true })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(/flyovers? detected/)).toBeVisible({ timeout: 10000 });
   });
 
   test('requests microphone permission when Start Mic is clicked and activates live spectrogram waterfall', async ({ page, context }) => {
@@ -43,7 +49,7 @@ test.describe('Doppler PWA Offline Geolocation', () => {
 
     // Button transitions to "Stop Mic" and live spectrogram badge is displayed
     await expect(page.locator('button:has-text("Stop Mic")')).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('text=● Live Microphone')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('Live microphone', { exact: true })).toBeVisible({ timeout: 10000 });
 
     // The audio worklet delivers chunks: the noise floor readout leaves its initial value once enough audio has been analysed.
     await expect(page.getByText('-82.0 dB', { exact: true })).toBeHidden({ timeout: 10000 });
@@ -57,8 +63,8 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     await page.goto('/');
 
     // Switch to File Analyzer tab
-    await page.click('button[role="tab"]:has-text("File Analyzer")');
-    await expect(page.locator('text=Upload Audio / Video')).toBeVisible();
+    await page.getByRole('tab', { name: /file/i }).click();
+    await expect(page.getByText('Upload audio or video')).toBeVisible();
 
     // The recording is synthesised so the test needs no fixture file, which are gitignored and absent in CI.
     const sampleRateHz = 2000;
@@ -66,12 +72,10 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     const fileInput = page.locator('input[type="file"]');
     await fileInput.setInputFiles({ name: 'synthetic-flyovers.wav', mimeType: 'audio/wav', buffer: Buffer.from(wav) });
 
-    // Verify file analysis status
-    await expect(page.locator('text=Analyzing synthetic-flyovers.wav')).toBeVisible({ timeout: 10000 });
-
-    // Verify spectrogram updates to Audio Clip Analysis and renders detected flyover tracks
-    await expect(page.locator('text=Audio Clip Analysis')).toBeVisible({ timeout: 15000 });
-    await expect(page.locator('text=Flyover Track(s) Detected')).toBeVisible({ timeout: 15000 });
+    // The analysis ends on the result, and the spectrogram switches to the clip with its flyovers marked.
+    await expect(page.getByRole('list', { name: 'Detected flyovers' })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('Clip analysis', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(/flyovers? detected/)).toBeVisible({ timeout: 15000 });
   });
 
   test('reloads and analyses audio with the network off after the first visit', async ({ page, context }) => {
@@ -83,7 +87,7 @@ test.describe('Doppler PWA Offline Geolocation', () => {
 
     await expect(page.getByText('Offline: stored map tiles only', { exact: true })).toBeVisible({ timeout: 10000 });
     await page.locator('button:has-text("Simulate Flyover Stream")').click();
-    await expect(page.locator('text=Estimated Location')).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText('Estimated location')).toBeVisible({ timeout: 30000 });
   });
 
   test('reports a file the browser cannot decode as an alert and lets the same file be chosen again', async ({ page }) => {
@@ -110,16 +114,17 @@ test.describe('Doppler PWA Offline Geolocation', () => {
   test('resumes the saved session after a reload', async ({ page }) => {
     await page.goto('/');
     await page.locator('button:has-text("Simulate Flyover Stream")').click();
-    await expect(page.locator('text=Estimated Location')).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText('Estimated location')).toBeVisible({ timeout: 30000 });
 
     await page.reload();
 
-    await expect(page.locator('text=Estimated Location')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('Estimated location')).toBeVisible({ timeout: 10000 });
   });
 
-  test('links the header to the release or commit this build came from', async ({ page }) => {
+  test('links the session panel to the release or commit this build came from', async ({ page }) => {
     await page.goto('/');
-    const link = page.locator('header a[target="_blank"]');
+    await page.getByRole('tab', { name: /session/i }).click();
+    const link = page.getByRole('tabpanel').locator('a[target="_blank"]');
 
     // A build whose tag is on its commit links to the release; any other build links to its commit, never to a release that does not exist.
     await expect(link).toHaveAttribute('href', /^https:\/\/github\.com\/Mearman\/doppler\/(releases\/tag\/v\d+\.\d+\.\d+|commit\/[0-9a-f]{40})$/);
@@ -133,29 +138,49 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     const TOUCH_TARGET_PX = 44;
     /** The least width and height, in pixels, at which the map and the spectrogram are still usable. */
     const MIN_VISUALIZER_PX = 160;
+    /** The tallest the top bar may be and still be a single row, in pixels. */
+    const MAX_BAR_PX = 64;
     test.use({ viewport: PHONE, hasTouch: true, isMobile: true });
 
-    test('stacks the controls under a map and spectrogram that fit the screen, with no sideways scroll', async ({ page }) => {
+    test('shows one of the map and spectrogram at a time, each filling the stage, with no sideways scroll', async ({ page }) => {
       await page.goto('/');
       await page.locator('button:has-text("Simulate Flyover Stream")').click();
-      await expect(page.locator('text=Estimated Location')).toBeVisible({ timeout: 30000 });
+      await expect(page.getByText('Estimated location')).toBeVisible({ timeout: 30000 });
 
-      const layout = await page.evaluate(() => {
-        const box = (selector: string): { width: number; height: number; top: number } => {
-          const element = document.querySelector(selector);
-          const rect = element?.getBoundingClientRect();
+      const measure = async (): Promise<{ scrollWidth: number; clientWidth: number; map: Box; canvas: Box; bar: Box }> =>
+        page.evaluate(() => {
+          const box = (selector: string): { width: number; height: number; top: number } => {
+            const rect = document.querySelector(selector)?.getBoundingClientRect();
 
-          return { width: rect?.width ?? 0, height: rect?.height ?? 0, top: rect?.top ?? 0 };
-        };
+            return { width: rect?.width ?? 0, height: rect?.height ?? 0, top: rect?.top ?? 0 };
+          };
 
-        return { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, map: box('.leaflet-container'), canvas: box('canvas') };
-      });
+          return { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, map: box('.leaflet-container'), canvas: box('canvas'), bar: box('header') };
+        });
 
-      expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth);
-      expect(layout.map.width).toBeGreaterThanOrEqual(PHONE.width - 1);
-      expect(layout.map.height).toBeGreaterThanOrEqual(MIN_VISUALIZER_PX);
-      expect(layout.canvas.height).toBeGreaterThanOrEqual(MIN_VISUALIZER_PX / 2);
-      expect(layout.map.top + layout.map.height).toBeLessThanOrEqual(PHONE.height);
+      const onMap = await measure();
+      expect(onMap.scrollWidth).toBeLessThanOrEqual(onMap.clientWidth);
+      expect(onMap.map.width).toBeGreaterThanOrEqual(PHONE.width - 1);
+      expect(onMap.map.height).toBeGreaterThanOrEqual(MIN_VISUALIZER_PX);
+      expect(onMap.map.top + onMap.map.height).toBeLessThanOrEqual(PHONE.height);
+      // The top bar is one row.
+      expect(onMap.bar.height).toBeLessThanOrEqual(MAX_BAR_PX);
+
+      await page.getByRole('button', { name: 'Spectrogram', exact: true }).click();
+      const onSpectrogram = await measure();
+      expect(onSpectrogram.scrollWidth).toBeLessThanOrEqual(onSpectrogram.clientWidth);
+      expect(onSpectrogram.canvas.width).toBeGreaterThanOrEqual(PHONE.width - 1);
+      expect(onSpectrogram.canvas.height).toBeGreaterThanOrEqual(MIN_VISUALIZER_PX / 2);
+    });
+
+    test('keeps the empty spectrogram message inside the screen', async ({ page }) => {
+      await page.goto('/');
+      await page.getByRole('button', { name: 'Spectrogram', exact: true }).click();
+      const message = await page.getByText('No audio yet.').boundingBox();
+
+      expect(message).not.toBeNull();
+      expect(message?.x).toBeGreaterThanOrEqual(0);
+      expect((message?.x ?? 0) + (message?.width ?? 0)).toBeLessThanOrEqual(PHONE.width);
     });
 
     test('gives every control a touch target of at least 44 pixels', async ({ page }) => {
