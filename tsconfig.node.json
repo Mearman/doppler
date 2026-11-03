@@ -6,5 +6,5 @@
   },
   "exclude": [],
   "extends": "./tsconfig.json",
-  "include": ["site/*.ts", "site/*.tsx", "cli/**/*.ts", "src/node/**/*.ts", "src/**/*.test.ts", "*.config.ts"]
+  "include": ["site/*.ts", "site/*.tsx", "site/client/**/*.unit.test.ts", "cli/**/*.ts", "src/node/**/*.ts", "src/**/*.test.ts", "*.config.ts"]
 }
