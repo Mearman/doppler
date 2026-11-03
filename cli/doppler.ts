@@ -133,7 +133,7 @@ function run(): void {
       console.log(`  Date / Time:   ${topHyp.dateIso} ~${new Date(topHyp.estimatedStartEpochSec * 1000).toISOString()}`);
       console.log(`  Probability:   ${(topHyp.probability * 100).toFixed(1)}% (Log-Posterior: ${topHyp.logPosterior.toFixed(2)})`);
       console.log(`  95% Ellipse:   ${topHyp.ellipseSemiMajorMeters.toFixed(0)}m × ${topHyp.ellipseSemiMinorMeters.toFixed(0)}m (bearing ${topHyp.ellipseBearingDeg.toFixed(0)}°)`);
-      console.log(`  Matched Segs:  ${topHyp.matchedSegmentIds.join(', ')}`);
+      console.log(`  Matched Segs:  ${topHyp.matches.map((match) => match.segmentId).join(', ')}`);
     } else {
       console.log('\nNo matching flight trajectory found in dataset.');
     }

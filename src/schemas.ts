@@ -192,6 +192,17 @@ export const SearchConstraints = define(
 export type SearchConstraints = z.infer<typeof SearchConstraints>;
 
 /**
+ * A flyover observation attributed to a flight segment under a location hypothesis. Matches are keyed by observation id, never by position, because an observation that fits no segment is absent from a hypothesis and would shift every later index.
+ */
+export const HypothesisMatch = define(
+  z.object({
+    observationId: z.string().min(1),
+    segmentId: z.string().min(1),
+  }),
+);
+export type HypothesisMatch = z.infer<typeof HypothesisMatch>;
+
+/**
  * Candidate observer location hypothesis with cumulative Bayesian log-posterior and 95% confidence ellipse.
  */
 export const LocationHypothesis = define(
@@ -210,7 +221,7 @@ export const LocationHypothesis = define(
     ellipseSemiMajorMeters: z.number().positive(),
     ellipseSemiMinorMeters: z.number().positive(),
     ellipseBearingDeg: z.number(),
-    matchedSegmentIds: z.array(z.string()).readonly(),
+    matches: z.array(HypothesisMatch).readonly(),
   }),
 );
 export type LocationHypothesis = z.infer<typeof LocationHypothesis>;
