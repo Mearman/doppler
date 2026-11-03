@@ -26,7 +26,9 @@ export const commitTypes: readonly CommitType[] = [
 
 const config: Options = {
   branches: ['main'],
-  repositoryUrl: 'git@github.com:Mearman/doppler.git',
+  // https, not SSH: this repository has no ruleset and no deploy key, so semantic-release pushes the release tag with the workflow's GITHUB_TOKEN, which it embeds in an https URL.
+  repositoryUrl: 'https://github.com/Mearman/doppler.git',
+  // No release commit: the changelog is the GitHub Release's notes, and the published package.json carries the version because the npm plugin writes it into the tarball without committing it. The version field in the repository is therefore a development placeholder, never the released number.
   plugins: [
     [
       '@semantic-release/commit-analyzer',
@@ -41,16 +43,8 @@ const config: Options = {
         preset: 'angular',
       },
     ],
-    '@semantic-release/changelog',
     ['@semantic-release/npm', { npmPublish: true }],
     '@semantic-release/github',
-    [
-      '@semantic-release/git',
-      {
-        assets: ['CHANGELOG.md', 'package.json'],
-        message: 'chore(release): ${nextRelease.version} [skip ci]',
-      },
-    ],
   ],
 };
 
