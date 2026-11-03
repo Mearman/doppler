@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   decodeSpatialCellCenter,
+  ellipseOutline,
   encodeSpatialCell,
   geoToEcef,
   geoToLocalEnu,
   interpolateTerrainElevationMeters,
   localEnuToGeo,
   slantDistanceMeters,
+  type HorizontalEllipse,
 } from './geo';
 
 describe('WGS84 Geodesy and Spatial Cell Indexing', () => {
@@ -87,5 +89,45 @@ describe('WGS84 Geodesy and Spatial Cell Indexing', () => {
     expect(midElev).toBeGreaterThan(100);
     expect(midElev).toBeLessThan(250);
     expect(midElev).toBeCloseTo(175, 0);
+  });
+
+  describe('ellipseOutline', () => {
+    const SEMI_MAJOR = 800;
+    const SEMI_MINOR = 300;
+    // Relative tolerance covering the linearisation of degrees over a few kilometres.
+    const RELATIVE_TOLERANCE = 0.01;
+    const axes = (major: number, minor: number, bearing: number): HorizontalEllipse => ({
+      ellipseSemiMajorMeters: major,
+      ellipseSemiMinorMeters: minor,
+      ellipseBearingDeg: bearing,
+    });
+
+    it.each([0, 51.752, 70])('keeps true metric axes at latitude %f', (lat) => {
+      const center = { lat, lon: -1.25, altMeters: 64 };
+      const ring = ellipseOutline(center, axes(SEMI_MAJOR, SEMI_MINOR, 0));
+      const enu = ring.map((point) => geoToLocalEnu(center, point));
+
+      expect(Math.abs(Math.max(...enu.map((v) => v.y)) - SEMI_MAJOR)).toBeLessThan(SEMI_MAJOR * RELATIVE_TOLERANCE);
+      expect(Math.abs(Math.max(...enu.map((v) => v.x)) - SEMI_MINOR)).toBeLessThan(SEMI_MINOR * RELATIVE_TOLERANCE);
+    });
+
+    it('orients the major axis along the compass bearing, clockwise from north', () => {
+      const center = { lat: 51.752, lon: -1.25, altMeters: 64 };
+      const [first] = ellipseOutline(center, axes(SEMI_MAJOR, SEMI_MINOR, 90));
+      expect(first).toBeDefined();
+      const enu = geoToLocalEnu(center, first!);
+
+      expect(enu.x).toBeGreaterThan(SEMI_MAJOR * (1 - RELATIVE_TOLERANCE));
+      expect(Math.abs(enu.y)).toBeLessThan(SEMI_MAJOR * RELATIVE_TOLERANCE);
+    });
+
+    it('returns a closed ring of segments plus one points at the centre altitude', () => {
+      const center = { lat: 10, lon: 20, altMeters: 123 };
+      const ring = ellipseOutline(center, axes(100, 50, 33), 12);
+
+      expect(ring).toHaveLength(13);
+      expect(ring[0]).toEqual(ring[12]);
+      expect(ring.every((point) => point.altMeters === 123)).toBe(true);
+    });
   });
 });

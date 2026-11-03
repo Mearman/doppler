@@ -76,6 +76,49 @@ export function localEnuToGeo(origin: Readonly<GeoPoint3D>, enuOffset: Readonly<
   return { lat, lon, altMeters };
 }
 
+/** Boundary vertices used to approximate an ellipse outline when the caller does not choose a count. */
+export const DEFAULT_ELLIPSE_SEGMENTS = 72;
+
+/** A horizontal ellipse on the ground: semi-axes in metres and the compass bearing of the major axis. */
+export interface HorizontalEllipse {
+  readonly ellipseSemiMajorMeters: number;
+  readonly ellipseSemiMinorMeters: number;
+  readonly ellipseBearingDeg: number;
+}
+
+/**
+ * Samples the outline of a horizontal confidence ellipse as geodetic points. The axes are metric distances on the local tangent plane, so the outline keeps its true shape at any latitude, where a degree of longitude is shorter than a degree of latitude.
+ * @param center - Ellipse centre; every returned point keeps its altitude.
+ * @param ellipse - Semi-axes in metres and the compass bearing of the semi-major axis in degrees clockwise from north, as `fisherToConfidenceEllipse95` returns them.
+ * @param segments - Number of boundary segments. The returned ring repeats its first point, so it holds `segments + 1` points.
+ * @returns Closed ring of boundary points, starting due along the major axis.
+ */
+export function ellipseOutline(
+  center: Readonly<GeoPoint3D>,
+  ellipse: Readonly<HorizontalEllipse>,
+  segments = DEFAULT_ELLIPSE_SEGMENTS,
+): readonly GeoPoint3D[] {
+  const bearingRad = ellipse.ellipseBearingDeg * DEG_TO_RAD;
+  const majorEast = Math.sin(bearingRad);
+  const majorNorth = Math.cos(bearingRad);
+  const ring: GeoPoint3D[] = [];
+  for (let step = 0; step <= segments; step += 1) {
+    const theta = (step * 2 * Math.PI) / segments;
+    const along = ellipse.ellipseSemiMajorMeters * Math.cos(theta);
+    const across = ellipse.ellipseSemiMinorMeters * Math.sin(theta);
+    // The minor axis points a quarter turn clockwise from the major axis: (north, -east) in (east, north) components.
+    ring.push(
+      localEnuToGeo(center, {
+        x: along * majorEast + across * majorNorth,
+        y: along * majorNorth - across * majorEast,
+        z: 0,
+      }),
+    );
+  }
+
+  return ring;
+}
+
 /**
  * Computes the 3D Euclidean slant distance in meters between two geodetic coordinates.
  * @param a - First 3D point.

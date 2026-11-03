@@ -7,6 +7,7 @@ import L from 'leaflet';
 import { MicMonitor } from '../../src/browser/mic-monitor';
 import { BUNDLED_GROUND_TRUTH, generateBundledReferenceAudio } from '../../src/bundled';
 import { decodeWavBytes } from '../../src/dsp/side-channels';
+import { ellipseOutline } from '../../src/physics/geo';
 import type { ComputedSingleFrame } from '../../src/dsp/spectrogram';
 import type { LocationHypothesis, LocationSession } from '../../src/schemas';
 import * as styles from '../styles.css';
@@ -193,20 +194,8 @@ export function App(): React.JSX.Element {
       )
       .addTo(markersLayer.current);
 
-    // Draw 95% Confidence Ellipse around top hypothesis
-    const semiMajorDeg = topHyp.ellipseSemiMajorMeters / 111132;
-    const semiMinorDeg = topHyp.ellipseSemiMinorMeters / 111132;
-    const ellipsePoints: [number, number][] = [];
-    const bearingRad = (topHyp.ellipseBearingDeg * Math.PI) / 180;
-
-    for (let step = 0; step <= 36; step += 1) {
-      const theta = (step * 2 * Math.PI) / 36;
-      const x0 = semiMinorDeg * Math.cos(theta);
-      const y0 = semiMajorDeg * Math.sin(theta);
-      const rotX = x0 * Math.cos(-bearingRad) - y0 * Math.sin(-bearingRad);
-      const rotY = x0 * Math.sin(-bearingRad) + y0 * Math.cos(-bearingRad);
-      ellipsePoints.push([topHyp.lat + rotY, topHyp.lon + rotX]);
-    }
+    // Draw the 95% confidence ellipse around the top hypothesis, in true metres on the ground.
+    const ellipsePoints = ellipseOutline(topHyp, topHyp).map((point): [number, number] => [point.lat, point.lon]);
 
     L.polygon(ellipsePoints, {
       color: '#3b82f6',
