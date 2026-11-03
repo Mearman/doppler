@@ -8,6 +8,7 @@ export * from './physics/algebra';
 export * from './physics/retarded-time';
 export * from './physics/rdp';
 export * from './dsp/fft';
+export * from './dsp/channels';
 export * from './dsp/decimate';
 export * from './dsp/spectrogram';
 export * from './dsp/ridge-tracker';
