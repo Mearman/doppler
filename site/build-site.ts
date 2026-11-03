@@ -1,5 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ICON_SPECS } from './icons';
 
 export interface BuildSiteOptions {
   readonly outDir: string;
@@ -16,20 +17,17 @@ export function buildSite(options: Readonly<BuildSiteOptions>): Set<string> {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Doppler - Offline Aircraft Acoustic Geolocation</title>
+  <meta name="description" content="Locate where an audio recording was made from the Doppler shifts of aircraft flyovers. Works offline.">
+  <meta name="theme-color" content="#18181c">
   <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="stylesheet" href="app.css">
   <link rel="manifest" href="manifest.webmanifest">
 </head>
 <body>
   <div id="root"></div>
+  <noscript>Doppler needs JavaScript to analyse audio and draw the map.</noscript>
   <script type="module" src="app.js"></script>
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js');
-      });
-    }
-  </script>
 </body>
 </html>`;
 
@@ -50,6 +48,12 @@ export function buildSite(options: Readonly<BuildSiteOptions>): Set<string> {
         sizes: 'any',
         type: 'image/svg+xml',
       },
+      ...ICON_SPECS.filter((spec) => spec.file !== 'apple-touch-icon.png').map((spec) => ({
+        src: spec.file,
+        sizes: `${String(spec.size)}x${String(spec.size)}`,
+        type: 'image/png',
+        purpose: spec.purpose,
+      })),
     ],
   };
 
@@ -58,7 +62,7 @@ export function buildSite(options: Readonly<BuildSiteOptions>): Set<string> {
 
   const precache = {
     version: packageVersion,
-    urls: ['./', 'index.html', 'app.js', 'app.css', 'icon.svg', 'manifest.webmanifest'],
+    urls: ['./', 'index.html', 'app.js', 'app.css', 'icon.svg', 'manifest.webmanifest', ...ICON_SPECS.map((spec) => spec.file)],
   };
 
   writeFileSync(join(outDir, 'precache.json'), JSON.stringify(precache, null, 2), 'utf8');

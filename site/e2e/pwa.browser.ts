@@ -10,7 +10,7 @@ test.describe('Doppler PWA Offline Geolocation', () => {
 
     await expect(page.locator('text=Doppler')).toBeVisible();
     await expect(page.locator('text=Aircraft Acoustic Geolocation')).toBeVisible();
-    await expect(page.locator('text=100% Offline')).toBeVisible();
+    await expect(page.getByText('Offline ready', { exact: true })).toBeVisible({ timeout: 10000 });
 
     // Map container and Spectrogram canvas exist
     const map = page.locator('.leaflet-container');
@@ -66,5 +66,17 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     // Verify spectrogram updates to Audio Clip Analysis and renders detected flyover tracks
     await expect(page.locator('text=Audio Clip Analysis')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('text=Flyover Track(s) Detected')).toBeVisible({ timeout: 15000 });
+  });
+
+  test('reloads and analyses audio with the network off after the first visit', async ({ page, context }) => {
+    await page.goto('/');
+    await expect(page.getByText('Offline ready', { exact: true })).toBeVisible({ timeout: 10000 });
+    // No intermediate reload: the worker and its chunks must come from the precache, not from runtime caching of an earlier controlled load.
+    await context.setOffline(true);
+    await page.reload();
+
+    await expect(page.getByText('Offline: stored map tiles only', { exact: true })).toBeVisible({ timeout: 10000 });
+    await page.locator('button:has-text("Simulate Flyover Stream")').click();
+    await expect(page.locator('text=Estimated Location')).toBeVisible({ timeout: 30000 });
   });
 });

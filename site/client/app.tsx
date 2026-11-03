@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Badge, Button, Card, Group, MantineProvider, Progress, Stack, Tabs, Text } from '@mantine/core';
+import { Alert, Badge, Button, Card, Group, MantineProvider, Progress, Stack, Tabs, Text } from '@mantine/core';
 import '@mantine/core/styles.css';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -11,7 +11,9 @@ import { ellipseOutline } from '../../src/physics/geo';
 import type { ComputedSingleFrame } from '../../src/dsp/spectrogram';
 import type { LocationHypothesis, LocationSession } from '../../src/schemas';
 import * as styles from '../styles.css';
+import { useOfflineStatus, type OfflineStatus } from './offline-status';
 import { SpectrogramViewer, type ClipSpectrogramData } from './spectrogram-viewer';
+import { TILE_URL_TEMPLATE } from './tiles';
 
 function formatCpaTimestamp(cpaTimeSec: number): string {
   if (cpaTimeSec > 1_000_000_000) {
@@ -23,6 +25,24 @@ function formatCpaTimestamp(cpaTimeSec: number): string {
   return mins > 0 ? `${String(mins)}m ${secs}s` : `${secs}s`;
 }
 
+interface OfflineBadge {
+  readonly label: string;
+  readonly color: string;
+}
+
+function describeOffline(status: Readonly<OfflineStatus>): OfflineBadge {
+  if (status.support === 'unavailable') {
+    return { label: 'Offline use unavailable', color: 'red' };
+  }
+  if (status.support === 'preparing') {
+    return { label: 'Preparing offline use', color: 'yellow' };
+  }
+
+  return status.online
+    ? { label: 'Offline ready', color: 'green' }
+    : { label: 'Offline: stored map tiles only', color: 'orange' };
+}
+
 export function App(): React.JSX.Element {
   const [session, setSession] = useState<LocationSession | null>(null);
   const [activeTab, setActiveTab] = useState<string | null>('live');
@@ -31,9 +51,11 @@ export function App(): React.JSX.Element {
   const [noiseFloorDb, setNoiseFloorDb] = useState(-82);
   const [isNoisePolluted, setIsNoisePolluted] = useState(false);
   const [activeFlyoverCount, setActiveFlyoverCount] = useState(0);
-  const [statusMessage, setStatusMessage] = useState('Offline Ready. Select an audio file or start live listening.');
+  const [statusMessage, setStatusMessage] = useState('Select an audio file or start live listening.');
   const [liveFrames, setLiveFrames] = useState<ComputedSingleFrame[]>([]);
   const [clipSpectrogram, setClipSpectrogram] = useState<ClipSpectrogramData | null>(null);
+
+  const offline = useOfflineStatus();
 
   const mapRef = useRef<HTMLDivElement | null>(null);
   const leafletMap = useRef<L.Map | null>(null);
@@ -138,8 +160,10 @@ export function App(): React.JSX.Element {
       zoomControl: true,
     });
 
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer(TILE_URL_TEMPLATE, {
       maxZoom: 19,
+      // CORS tile requests give the service worker inspectable responses it can cache for offline use.
+      crossOrigin: true,
       attribution: '© OpenStreetMap contributors',
     }).addTo(map);
 
@@ -294,6 +318,7 @@ export function App(): React.JSX.Element {
   };
 
   const topHypothesis: LocationHypothesis | undefined = session?.hypotheses[0];
+  const offlineBadge = describeOffline(offline);
 
   return (
     <div className={styles.appContainer}>
@@ -310,11 +335,22 @@ export function App(): React.JSX.Element {
           <Badge color={session?.enfSignature.detected === true ? 'teal' : 'gray'} variant="light">
             {session?.enfSignature.detected === true ? `ENF ${session.enfSignature.nominalHz}Hz Grid` : 'ENF Undetected'}
           </Badge>
-          <Badge color="green" variant="light">
-            100% Offline
+          <Badge color={offlineBadge.color} variant="light">
+            {offlineBadge.label}
           </Badge>
         </Group>
       </header>
+
+      {offline.updateAvailable && (
+        <Alert color="blue" title="Update available" role="status">
+          <Group justify="space-between">
+            <Text size="sm">A newer version is ready. Reloading clears the current session, so export it first.</Text>
+            <Button size="compact-sm" onClick={offline.applyUpdate}>
+              Reload to update
+            </Button>
+          </Group>
+        </Alert>
+      )}
 
       <div className={styles.mainContent}>
         <aside className={styles.sidebar}>
