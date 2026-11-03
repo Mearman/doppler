@@ -87,7 +87,8 @@ jobs:
       - name: Upgrade npm for OIDC trusted publishing
         run: npm install -g npm@11.20.0
       - name: Release
-        run: pnpm exec semantic-release
+        # HUSKY=0 because semantic-release pushes its tag with `git push`, which would otherwise run the repository's pre-push hook (typecheck, lint, tests, build) against a working tree the npm plugin has already stamped with the new version, and fail the release on that.
+        run: HUSKY=0 pnpm exec semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Blanked, not omitted: an inherited NPM_TOKEN or NODE_AUTH_TOKEN would otherwise be used in preference to the OIDC exchange.

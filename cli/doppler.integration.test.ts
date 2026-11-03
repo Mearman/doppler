@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { BUNDLED_DATASET, BUNDLED_GROUND_TRUTH, BUNDLED_SEGMENTS } from '../src/bundled';
 import { synthesizeMultiFlyoverAudio } from '../src/dsp/side-channels';
 import { writeWavFile } from '../src/node/entry';
@@ -59,7 +60,10 @@ describe('CLI Integration Suite (cli/doppler.ts)', { timeout: 30000 }, () => {
 
   it('prints version and help documentation', () => {
     const versionOut = execSync('npx tsx cli/doppler.ts -v', { encoding: 'utf8' });
-    expect(versionOut).toContain('doppler v0.1.0');
+    // The version comes from package.json, which a release rewrites in the working tree before the tag is pushed, so the expectation reads it instead of repeating a number that changes with every release.
+    const manifest: unknown = JSON.parse(readFileSync(join(import.meta.dirname, '../package.json'), 'utf8'));
+    const { version } = z.object({ version: z.string() }).parse(manifest);
+    expect(versionOut).toContain(`doppler v${version}`);
 
     const helpOut = execSync('npx tsx cli/doppler.ts --help', { encoding: 'utf8' });
     expect(helpOut).toContain('Usage:');
