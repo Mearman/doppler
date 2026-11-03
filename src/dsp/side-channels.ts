@@ -1,6 +1,91 @@
 import { synthesizeRetardedDopplerCurve } from '../physics/retarded-time';
 import type { EnfSignature, GeoPoint3D, LinearFlightSegment } from '../schemas';
+import {
+  ENF_BACKGROUND_MAX_HZ,
+  ENF_BACKGROUND_MIN_HZ,
+  ENF_DOMINANCE_MARGIN_DB,
+  ENF_MAX_FFT_SIZE,
+  ENF_MIN_FFT_SIZE,
+  ENF_MIN_SAMPLES,
+  ENF_MIN_SNR_DB,
+  ENF_NOTCH_HALF_WIDTH_HZ,
+  GRID_50_NOMINAL_HZ,
+  GRID_60_NOMINAL_HZ,
+  MISSING_BIN_POWER_DB,
+  NO_BACKGROUND_NOISE_FLOOR_DB,
+  type NominalGridHz,
+} from './constants';
 import { computeHannPowerSpectrumDb } from './fft';
+
+/**
+ * Dolbear's Law temperature in degrees Celsius at the reference chirp rate.
+ */
+const DOLBEAR_BASE_TEMP_CELSIUS = 10;
+
+/**
+ * Dolbear's Law reference stridulation rate in chirps per minute, at which the temperature equals the base temperature.
+ */
+const DOLBEAR_REFERENCE_CHIRPS_PER_MINUTE = 40;
+
+/**
+ * Dolbear's Law rise in stridulation rate, in chirps per minute, for each degree Celsius.
+ */
+const DOLBEAR_CHIRPS_PER_MINUTE_PER_CELSIUS = 7;
+
+/**
+ * Seed of the deterministic pseudo-random generator behind the synthetic noise, fixed so that tests reproduce.
+ */
+const SYNTHETIC_NOISE_SEED = 133_742;
+
+/**
+ * Multiplier of the linear congruential generator (Numerical Recipes parameters, modulus 2^32).
+ */
+const LCG_MULTIPLIER = 1_664_525;
+
+/**
+ * Increment of the linear congruential generator (Numerical Recipes parameters, modulus 2^32).
+ */
+const LCG_INCREMENT = 1_013_904_223;
+
+/**
+ * Largest 32-bit unsigned integer, the divisor that maps a generator state to a uniform value in `[0, 1]`.
+ */
+const UINT32_MAX = 0xff_ff_ff_ff;
+
+/**
+ * Smallest uniform value passed to the logarithm of the Box-Muller transform, which is undefined at zero.
+ */
+const MIN_BOX_MULLER_UNIFORM = 1e-7;
+
+/**
+ * Default standard deviation of the synthetic background noise, in full-scale sample units.
+ */
+const DEFAULT_SYNTHETIC_NOISE_STD = 0.005;
+
+/**
+ * Spacing in seconds of the grid on which the retarded Doppler frequency is evaluated; samples between grid points are linearly interpolated.
+ */
+const DOPPLER_GRID_STEP_SEC = 0.1;
+
+/**
+ * Slant range in metres beyond which a flyover is not synthesised: it is too distant to be audible.
+ */
+const MAX_AUDIBLE_SLANT_METERS = 6500;
+
+/**
+ * Slant range in metres at which the synthesised flyover has unit attenuation, the numerator of the inverse-distance envelope.
+ */
+const REFERENCE_SLANT_METERS = 1200;
+
+/**
+ * Smallest slant range in metres used by the envelope, which bounds the gain of a very close pass.
+ */
+const MIN_ENVELOPE_SLANT_METERS = 300;
+
+/**
+ * Amplitude of the second harmonic relative to the fundamental of a synthesised engine tone.
+ */
+const SECOND_HARMONIC_GAIN = 0.35;
 
 /**
  * Detects passive 50.00 Hz vs 60.00 Hz Electrical Network Frequency (ENF) mains hum in an audio buffer to split the global search space by power-grid hemisphere.
@@ -9,11 +94,11 @@ import { computeHannPowerSpectrumDb } from './fft';
  * @returns Detected ENF nominal grid (50 Hz, 60 Hz, or unknown), SNR, and geographic region hint.
  */
 export function detectEnfSignature(samples: Readonly<Float32Array>, sampleRateHz: number): EnfSignature {
-  let fftSize = 4096;
-  while (fftSize * 2 <= samples.length && fftSize < 16384) {
+  let fftSize = ENF_MIN_FFT_SIZE;
+  while (fftSize * 2 <= samples.length && fftSize < ENF_MAX_FFT_SIZE) {
     fftSize <<= 1;
   }
-  if (samples.length < 512) {
+  if (samples.length < ENF_MIN_SAMPLES) {
     return {
       detected: false,
       nominalHz: 'unknown',
@@ -26,27 +111,27 @@ export function detectEnfSignature(samples: Readonly<Float32Array>, sampleRateHz
   const spectrumDb = computeHannPowerSpectrumDb(samples, fftSize);
   const binStepHz = sampleRateHz / fftSize;
 
-  const bin50 = Math.round(50 / binStepHz);
-  const bin60 = Math.round(60 / binStepHz);
+  const bin50 = Math.round(GRID_50_NOMINAL_HZ / binStepHz);
+  const bin60 = Math.round(GRID_60_NOMINAL_HZ / binStepHz);
 
   const power50Db = Math.max(
-    spectrumDb[bin50 - 1] ?? -120,
-    spectrumDb[bin50] ?? -120,
-    spectrumDb[bin50 + 1] ?? -120,
+    spectrumDb[bin50 - 1] ?? MISSING_BIN_POWER_DB,
+    spectrumDb[bin50] ?? MISSING_BIN_POWER_DB,
+    spectrumDb[bin50 + 1] ?? MISSING_BIN_POWER_DB,
   );
   const power60Db = Math.max(
-    spectrumDb[bin60 - 1] ?? -120,
-    spectrumDb[bin60] ?? -120,
-    spectrumDb[bin60 + 1] ?? -120,
+    spectrumDb[bin60 - 1] ?? MISSING_BIN_POWER_DB,
+    spectrumDb[bin60] ?? MISSING_BIN_POWER_DB,
+    spectrumDb[bin60 + 1] ?? MISSING_BIN_POWER_DB,
   );
 
-  // Measure surrounding background between 42 Hz and 68 Hz excluding 50 Hz and 60 Hz notches
+  // Measure surrounding background across the ENF background band, excluding a notch around each nominal grid frequency
   const bgValues: number[] = [];
-  const startBin = Math.max(1, Math.floor(42 / binStepHz));
-  const endBin = Math.min((fftSize >> 1) - 1, Math.ceil(68 / binStepHz));
+  const startBin = Math.max(1, Math.floor(ENF_BACKGROUND_MIN_HZ / binStepHz));
+  const endBin = Math.min((fftSize >> 1) - 1, Math.ceil(ENF_BACKGROUND_MAX_HZ / binStepHz));
   for (let b = startBin; b <= endBin; b += 1) {
     const hz = b * binStepHz;
-    if (Math.abs(hz - 50) > 1.8 && Math.abs(hz - 60) > 1.8) {
+    if (Math.abs(hz - GRID_50_NOMINAL_HZ) > ENF_NOTCH_HALF_WIDTH_HZ && Math.abs(hz - GRID_60_NOMINAL_HZ) > ENF_NOTCH_HALF_WIDTH_HZ) {
       const val = spectrumDb[b];
       if (val !== undefined) {
         bgValues.push(val);
@@ -54,26 +139,26 @@ export function detectEnfSignature(samples: Readonly<Float32Array>, sampleRateHz
     }
   }
   bgValues.sort((a, b) => a - b);
-  const noiseFloorDb = bgValues.length > 0 ? (bgValues[bgValues.length >> 1] ?? -100) : -100;
+  const noiseFloorDb = bgValues.length > 0 ? (bgValues[bgValues.length >> 1] ?? NO_BACKGROUND_NOISE_FLOOR_DB) : NO_BACKGROUND_NOISE_FLOOR_DB;
 
   const snr50 = power50Db - noiseFloorDb;
   const snr60 = power60Db - noiseFloorDb;
 
-  if (snr50 >= 6.0 && snr50 > snr60 + 2.0) {
+  if (snr50 >= ENF_MIN_SNR_DB && snr50 > snr60 + ENF_DOMINANCE_MARGIN_DB) {
     return {
       detected: true,
       nominalHz: '50',
-      measuredFreqHz: 50.0,
+      measuredFreqHz: GRID_50_NOMINAL_HZ,
       snrDb: snr50,
       regionHint: '50 Hz Grid (Europe, UK, Asia, Africa, Australia, E. Japan)',
     };
   }
 
-  if (snr60 >= 6.0 && snr60 > snr50 + 2.0) {
+  if (snr60 >= ENF_MIN_SNR_DB && snr60 > snr50 + ENF_DOMINANCE_MARGIN_DB) {
     return {
       detected: true,
       nominalHz: '60',
-      measuredFreqHz: 60.0,
+      measuredFreqHz: GRID_60_NOMINAL_HZ,
       snrDb: snr60,
       regionHint: '60 Hz Grid (North America, South Korea, Taiwan, W. Japan)',
     };
@@ -94,7 +179,10 @@ export function detectEnfSignature(samples: Readonly<Float32Array>, sampleRateHz
  * @returns Estimated ambient temperature in degrees Celsius.
  */
 export function estimateTempFromCricketChirpsCelsius(chirpsPerMinute: number): number {
-  return 10 + (chirpsPerMinute - 40) / 7;
+  return (
+    DOLBEAR_BASE_TEMP_CELSIUS +
+    (chirpsPerMinute - DOLBEAR_REFERENCE_CHIRPS_PER_MINUTE) / DOLBEAR_CHIRPS_PER_MINUTE_PER_CELSIUS
+  );
 }
 
 /**
@@ -110,7 +198,7 @@ export interface SyntheticAudioConfig {
     readonly baseFreqHz: number;
     readonly amplitude: number;
   }[];
-  readonly enfNominalHz?: 50 | 60;
+  readonly enfNominalHz?: NominalGridHz;
   readonly enfAmplitude?: number;
   readonly noiseStd?: number;
   readonly noisePollutionBursts?: readonly {
@@ -131,18 +219,18 @@ export function synthesizeMultiFlyoverAudio(config: Readonly<SyntheticAudioConfi
   const dt = 1 / config.sampleRateHz;
 
   // Deterministic LCG PRNG for reproducible tests
-  let seed = 133742;
+  let seed = SYNTHETIC_NOISE_SEED;
   const nextGaussian = (): number => {
-    seed = (seed * 1664525 + 1013904223) >>> 0;
-    const u1 = Math.max(1e-7, seed / 0xffffffff);
-    seed = (seed * 1664525 + 1013904223) >>> 0;
-    const u2 = seed / 0xffffffff;
+    seed = (seed * LCG_MULTIPLIER + LCG_INCREMENT) >>> 0;
+    const u1 = Math.max(MIN_BOX_MULLER_UNIFORM, seed / UINT32_MAX);
+    seed = (seed * LCG_MULTIPLIER + LCG_INCREMENT) >>> 0;
+    const u2 = seed / UINT32_MAX;
 
-    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    return Math.sqrt(-(2 * Math.log(u1))) * Math.cos(2 * Math.PI * u2);
   };
 
   // Add background noise, ENF mains hum, and optional noise-pollution bursts
-  const baseNoiseStd = config.noiseStd ?? 0.005;
+  const baseNoiseStd = config.noiseStd ?? DEFAULT_SYNTHETIC_NOISE_STD;
   const enfAmp = config.enfAmplitude ?? 0;
   const enfHz = config.enfNominalHz;
 
@@ -166,12 +254,11 @@ export function synthesizeMultiFlyoverAudio(config: Readonly<SyntheticAudioConfi
   // Synthesize each aircraft flyover with continuous phase accumulation
   for (const flyover of config.flyovers) {
     let phase = 0;
-    // Evaluate retarded Doppler frequency every 0.1 seconds and linearly interpolate across samples
-    const stepSec = 0.1;
-    const numGrid = Math.ceil(config.durationSec / stepSec) + 1;
+    // Evaluate the retarded Doppler frequency on a coarse grid and linearly interpolate across samples
+    const numGrid = Math.ceil(config.durationSec / DOPPLER_GRID_STEP_SEC) + 1;
     const gridTimes: number[] = [];
     for (let k = 0; k < numGrid; k += 1) {
-      gridTimes.push(config.startEpochSec + k * stepSec);
+      gridTimes.push(config.startEpochSec + k * DOPPLER_GRID_STEP_SEC);
     }
     const curve = synthesizeRetardedDopplerCurve(config.observer, flyover.segment, {
       baseFreqHz: flyover.baseFreqHz,
@@ -180,7 +267,7 @@ export function synthesizeMultiFlyoverAudio(config: Readonly<SyntheticAudioConfi
 
     for (let i = 0; i < numSamples; i += 1) {
       const tOffset = i * dt;
-      const gridPos = tOffset / stepSec;
+      const gridPos = tOffset / DOPPLER_GRID_STEP_SEC;
       const gIdx = Math.min(curve.length - 2, Math.max(0, Math.floor(gridPos)));
       const frac = gridPos - gIdx;
       const pt0 = curve[gIdx];
@@ -192,12 +279,12 @@ export function synthesizeMultiFlyoverAudio(config: Readonly<SyntheticAudioConfi
       const instFreqHz = pt0.observedFreqHz + frac * (pt1.observedFreqHz - pt0.observedFreqHz);
       const slantMeters = pt0.slantDistanceMeters + frac * (pt1.slantDistanceMeters - pt0.slantDistanceMeters);
 
-      // Inverse-distance spherical spreading envelope with smooth fade outside 6 km
-      if (slantMeters < 6500) {
-        const attenuation = 1200 / Math.max(300, slantMeters);
+      // Inverse-distance spherical spreading envelope, cut off beyond the audible range
+      if (slantMeters < MAX_AUDIBLE_SLANT_METERS) {
+        const attenuation = REFERENCE_SLANT_METERS / Math.max(MIN_ENVELOPE_SLANT_METERS, slantMeters);
         phase += 2 * Math.PI * instFreqHz * dt;
         const fundamental = Math.sin(phase);
-        const harmonic2 = 0.35 * Math.sin(2 * phase);
+        const harmonic2 = SECOND_HARMONIC_GAIN * Math.sin(2 * phase);
         output[i] = (output[i] ?? 0) + flyover.amplitude * attenuation * (fundamental + harmonic2);
       }
     }
