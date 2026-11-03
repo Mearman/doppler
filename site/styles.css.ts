@@ -290,18 +290,6 @@ export const catalogueItem = style({ display: 'flex', alignItems: 'center', just
 
 export const catalogueName = style({ display: 'flex', flexDirection: 'column', minWidth: 0, fontSize: 14 });
 
-export const field = style({ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8, fontSize: 13, color: vars.color.muted });
-
-export const textInput = style({
-  padding: '10px 12px',
-  borderRadius: 8,
-  border: `1px solid ${vars.color.border}`,
-  backgroundColor: vars.color.background,
-  color: vars.color.text,
-  font: 'inherit',
-  fontSize: 14,
-});
-
 export const busy = style({ display: 'flex', flexDirection: 'column', gap: 6 });
 
 export const busyText = style({ display: 'flex', flexDirection: 'column', margin: 0, fontSize: 13, color: vars.color.muted });

@@ -26,11 +26,12 @@ No environment variables are required to build, test or run. The scheduled ADS-B
 | --- | --- |
 | Build library (`dist/`) and CLI (`dist-cli/`) | `pnpm build` |
 | Build the PWA into `site-dist/` | `pnpm site` |
-| Typecheck (five tsconfig projects) | `pnpm typecheck` |
+| Typecheck (six tsconfig projects) | `pnpm typecheck` |
 | Lint, as CI runs it | `pnpm lint:check` |
 | Lint and auto-fix | `pnpm lint` |
 | Unit and integration tests | `pnpm test` |
 | Browser tests (builds first) | `pnpm test:e2e` |
+| Deploy the live relay Worker | `pnpm deploy:worker` (needs `wrangler login` once, as the account that owns it) |
 
 Run one test file or one test:
 
@@ -88,7 +89,7 @@ No flight data is built in: the CLI requires `--dataset`, and the PWA starts wit
 - **The CLI bundle does not depend on `dist/`.** `tsdown.config.ts` marks `@mearman/doppler` and `@mearman/doppler/node` external for the CLI, but `cli/doppler.ts` imports `../src` directly, so the two builds are independent.
 - **The CLI version is read from `package.json`** via `import.meta.url`, ensuring CLI output (`doppler -v`) stays synchronized with semantic-release without hardcoded literals.
 - **`incremental-adsb.yml` publishes a day's dataset to Hugging Face.** At 06:00 UTC it streams the `adsb.lol` `globe_history` release for the previous day through `doppler ingest --input -`, keeps one region (the United Kingdom unless the `bbox` input says otherwise) and uploads `YYYY-MM-DD.dataset.json` to the `Mearman/doppler-adsb` dataset repository with the `HF_TOKEN` secret. A day's file can be larger than `loadDatasetFile` can read as one string; the deferred dataset size issue tracks that.
-- **Real ADS-B data enters through `doppler ingest`.** It accepts a raw `adsb.lol` or `tar1090` trace file, a directory of them, ready-made segments, or (`--input -`) the day's tar on standard input, with `--bbox` to keep one region. `locate` and `session` need `--dataset`, and a PWA with no flight data loaded detects flyovers but cannot place them. The PWA's Data section loads a dataset file, a published file small enough to parse in a browser (a string above about 512 MB cannot be), or the live feed, which polls FlyItalyADSB with the person's own free key (its CORS policy admits browsers; every keyless live ADS-B API tested, including adsb.lol, adsb.fi, airplanes.live, adsb.one and OpenSky, sends none). `src/live-adsb.ts` turns readsb style responses into the same segments an archive trace gives, and `src/browser/dataset-store.ts` keeps the loaded dataset in IndexedDB.
+- **Real ADS-B data enters through `doppler ingest`.** It accepts a raw `adsb.lol` or `tar1090` trace file, a directory of them, ready-made segments, or (`--input -`) the day's tar on standard input, with `--bbox` to keep one region. `locate` and `session` need `--dataset`, and a PWA with no flight data loaded detects flyovers but cannot place them. The PWA's Data section loads a dataset file, a published file small enough to parse in a browser (a string above about 512 MB cannot be), or the live feed, which polls adsb.lol's keyless point API through the relay Worker in `worker/` (no ADS-B service tested, including adsb.lol, adsb.fi, airplanes.live, adsb.one and OpenSky, sends CORS headers to a browser, and the relay adds them, caches each answer for a few seconds and forwards only the point query within `MAX_RADIUS_NM`). `src/live-adsb.ts` turns readsb style responses (time in milliseconds) into the same segments an archive trace gives, and `src/browser/dataset-store.ts` keeps the loaded dataset in IndexedDB.
 - **Workflows pin actions differently.** `pages.yml` pins actions by commit SHA. `ci.yml` and `incremental-adsb.yml` use version tags. Keep the pins in the style of the file you edit.
 
 ## References

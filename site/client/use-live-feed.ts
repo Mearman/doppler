@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { loadDataset } from '../../src/browser/dataset-store';
-import { loadLiveFeedKey, saveLiveFeedKey } from '../../src/browser/storage';
 import { emptyDataset } from '../../src/dataset';
-import { FREE_PLAN_MAX_RADIUS_KM, LiveFeedError, LiveTrackBook, fetchLivePings, liveDataset } from '../../src/live-adsb';
+import { MAX_RADIUS_KM, LiveFeedError, LiveTrackBook, fetchLivePings, liveDataset } from '../../src/live-adsb';
 import { MS_PER_SECOND } from '../../src/time';
 import type { Solver } from './use-solver';
 
-/** Seconds between polls. The free plan allows 30 requests a minute per key, so a poll every 10 seconds uses a fifth of that and leaves room for a second tab. */
+/** Seconds between polls. The relay shares each answer between callers for 5 seconds, so a poll every 10 seconds is cheap for the upstream however many pages are open. */
 const POLL_INTERVAL_SEC = 10;
 
 /** The area the live feed is asked about: a centre and a radius. */
@@ -29,10 +28,10 @@ export interface LiveFeedState {
 
 /** The live feed as the page drives it. */
 export interface LiveFeed extends LiveFeedState {
-  readonly apiKey: string;
-  readonly setApiKey: (apiKey: string) => void;
-  /** Radius actually asked for: the area's, limited to what the free plan allows. */
+  /** Radius actually asked for: the area's, limited to what the relay forwards. */
   readonly radiusKm: number;
+  /** Whether the visible map area fits inside what the relay forwards; when it does not, the feed follows only the circle around the map's centre. */
+  readonly coversView: boolean;
   readonly start: () => void;
   readonly stop: () => void;
 }
@@ -40,32 +39,19 @@ export interface LiveFeed extends LiveFeedState {
 const IDLE: LiveFeedState = { active: false, aircraftCount: 0, segmentCount: 0, updatedAtEpochSec: null };
 
 /**
- * Polls the live ADS-B feed around the search area and keeps the worker's flight data to the last few minutes of tracks.
+ * Polls the live ADS-B relay around the search area and keeps the worker's flight data to the last few minutes of tracks.
  * While it runs it owns the worker's dataset; stopping it puts back the dataset the person loaded, or none.
  * @param solver - Receives each new dataset and reports failures.
  * @param area - The area to ask about, which follows the map.
  * @returns The feed's state and controls.
  */
 export function useLiveFeed(solver: Readonly<Pick<Solver, 'setDataset' | 'reportError'>>, area: Readonly<SearchArea>): LiveFeed {
-  const [apiKey, setApiKeyState] = useState(loadLiveFeedKey);
   const [state, setState] = useState<LiveFeedState>(IDLE);
   const controllerRef = useRef<AbortController | null>(null);
   const areaRef = useRef(area);
   areaRef.current = area;
   const { setDataset, reportError } = solver;
-  const radiusKm = Math.min(area.radiusKm, FREE_PLAN_MAX_RADIUS_KM);
-
-  const setApiKey = useCallback(
-    (next: string): void => {
-      setApiKeyState(next);
-      try {
-        saveLiveFeedKey(next);
-      } catch (err) {
-        reportError(`The key could not be kept in this browser: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-    [reportError],
-  );
+  const radiusKm = Math.min(area.radiusKm, MAX_RADIUS_KM);
 
   const stop = useCallback((): void => {
     controllerRef.current?.abort();
@@ -93,7 +79,7 @@ export function useLiveFeed(solver: Readonly<Pick<Solver, 'setDataset' | 'report
       let waitSec = POLL_INTERVAL_SEC;
       try {
         const { lat, lon, radiusKm: requested } = areaRef.current;
-        const pings = await fetchLivePings({ apiKey, lat, lon, radiusKm: Math.min(requested, FREE_PLAN_MAX_RADIUS_KM) }, controller.signal);
+        const pings = await fetchLivePings({ lat, lon, radiusKm: requested }, controller.signal);
         book.add(pings);
         const segments = book.segments();
         const nowSec = Math.floor(Date.now() / MS_PER_SECOND);
@@ -104,7 +90,7 @@ export function useLiveFeed(solver: Readonly<Pick<Solver, 'setDataset' | 'report
           return;
         }
         if (err instanceof LiveFeedError && err.fatal) {
-          // A bad key or radius repeats on every poll, so the feed stops and says why.
+          // A query the relay refuses repeats on every poll, so the feed stops and says why.
           reportError(err.message);
           controller.abort();
           setState(IDLE);
@@ -125,7 +111,7 @@ export function useLiveFeed(solver: Readonly<Pick<Solver, 'setDataset' | 'report
       });
     };
     void poll();
-  }, [apiKey, reportError, setDataset]);
+  }, [reportError, setDataset]);
 
   useEffect(
     () => () => {
@@ -134,5 +120,5 @@ export function useLiveFeed(solver: Readonly<Pick<Solver, 'setDataset' | 'report
     [],
   );
 
-  return { ...state, apiKey, setApiKey, radiusKm, start, stop };
+  return { ...state, radiusKm, coversView: area.radiusKm <= MAX_RADIUS_KM, start, stop };
 }

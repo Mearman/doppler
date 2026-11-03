@@ -3,29 +3,29 @@ import { type AdsbTraceOptions, type RawAdsbTraceFile, processRawAdsbTrace } fro
 import { define } from './define';
 import type { DopplerDataset, LinearFlightSegment } from './schemas';
 import { buildConstellationIndex } from './solver/constellation';
+import { KM_PER_NM, MAX_RADIUS_NM } from './live-limits';
 import { MS_PER_SECOND } from './time';
 
-/** Base URL of the FlyItalyADSB API, a free keyed ADS-B service whose CORS policy admits browser pages (a key goes in the `X-Api-Key` header). */
-const API_BASE_URL = 'https://api.flyitalyadsb.com/v2';
+/** Base URL of the project's relay Worker, which serves adsb.lol's keyless point API with CORS headers (no ADS-B service sends them to browsers itself). */
+export const RELAY_BASE_URL = 'https://doppler-adsb-relay.joseph-b4f.workers.dev';
 
-/** Largest search radius, in kilometres, the free plan accepts per request; a larger one is refused with 403. */
-export const FREE_PLAN_MAX_RADIUS_KM = 500;
+/** Largest search radius, in kilometres, the relay forwards. */
+export const MAX_RADIUS_KM = MAX_RADIUS_NM * KM_PER_NM;
 
 /** Seconds of tracks the live book keeps. A listening episode lasts minutes, so a window several times that keeps every aircraft that passed during one, while older traffic stays out of the match. */
 export const LIVE_WINDOW_SEC = 1200;
 
-/** HTTP statuses that mean the key or the radius is refused (401, 403), which a retry cannot fix, and that the key is over its rate (429), which a wait does. */
-const HTTP_UNAUTHORIZED = 401;
-const HTTP_FORBIDDEN = 403;
+/** HTTP statuses that mean the relay will not serve this query (a path or radius it refuses), which a retry cannot fix, and that the upstream is over its rate, which a wait does. */
+const HTTP_NOT_FOUND = 404;
 const HTTP_TOO_MANY_REQUESTS = 429;
 
-/** Decimal places of a coordinate in the query: 1e-4 degrees is about 11 m, far finer than the search radius needs. */
-const COORDINATE_DECIMALS = 4;
+/** Decimal places of a coordinate in the query: 1e-2 degrees is about 1 km, far finer than the search radius needs, and the relay rounds to the same so that nearby pages share a cached answer. */
+const COORDINATE_DECIMALS = 2;
 
 /** Characters of the ISO 8601 calendar date (`YYYY-MM-DD`) at the start of a `Date.toISOString()` string. */
 const ISO_DATE_LENGTH = 'YYYY-MM-DD'.length;
 
-/** One aircraft in a readsb `aircraft.json` style response, which tar1090, adsb.lol and FlyItalyADSB all use. Altitude is barometric in feet, or the string `ground`. */
+/** One aircraft in a readsb `aircraft.json` style response, which tar1090 and adsb.lol use. Altitude is barometric in feet, or the string `ground`. */
 const ReadsbAircraftSchema = define(
   z.object({
     hex: z.string().min(1),
@@ -39,7 +39,7 @@ const ReadsbAircraftSchema = define(
   }),
 );
 
-/** The response of a point query: the time it describes in epoch seconds and the aircraft in range. */
+/** The response of a point query: the time it describes in epoch milliseconds (adsb.lol's unit) and the aircraft in range. */
 const ReadsbResponseSchema = define(z.object({ now: z.number(), ac: z.array(ReadsbAircraftSchema) }));
 
 /** One position report of one aircraft. */
@@ -66,7 +66,7 @@ export function livePingsFromResponse(response: unknown): LivePing[] {
   return ac.flatMap((aircraft) =>
     aircraft.lat === undefined || aircraft.lon === undefined
       ? []
-      : [{ icao: aircraft.hex, registration: aircraft.r, typeCode: aircraft.t, epochSec: now - (aircraft.seen_pos ?? 0), lat: aircraft.lat, lon: aircraft.lon, altitudeFt: aircraft.alt_baro ?? null }],
+      : [{ icao: aircraft.hex, registration: aircraft.r, typeCode: aircraft.t, epochSec: now / MS_PER_SECOND - (aircraft.seen_pos ?? 0), lat: aircraft.lat, lon: aircraft.lon, altitudeFt: aircraft.alt_baro ?? null }],
   );
 }
 
@@ -150,7 +150,6 @@ export function liveDataset(segments: readonly LinearFlightSegment[], generatedA
 
 /** A point query: aircraft within a radius of a position. */
 export interface LiveQuery {
-  readonly apiKey: string;
   readonly lat: number;
   readonly lon: number;
   readonly radiusKm: number;
@@ -161,7 +160,7 @@ export class LiveFeedError extends Error {
   /** Seconds the service asked the caller to wait before asking again, from `Retry-After`, when it sent one. */
   public readonly retryAfterSec: number | undefined;
 
-  /** Whether asking again with the same key and radius will fail the same way, as it does for a refused key or radius. */
+  /** Whether asking again with the same query will fail the same way, as it does for a radius the relay refuses. */
   public readonly fatal: boolean;
 
   public constructor(message: string, options: Readonly<{ retryAfterSec: number | undefined; fatal: boolean }>) {
@@ -173,22 +172,20 @@ export class LiveFeedError extends Error {
 }
 
 /**
- * Asks the service for the aircraft within a radius of a point.
- * @param query - The key, the centre and the radius, which is limited by the key's plan.
+ * Asks the relay for the aircraft within a radius of a point.
+ * @param query - The centre and the radius, which is limited to what the relay forwards.
  * @param signal - Cancels the request.
  * @returns The position reports in the answer.
- * @throws LiveFeedError when the service refuses the key (401, 403) or the rate (429), or answers with anything but success.
+ * @throws LiveFeedError when the relay refuses the query (404) or the upstream is over its rate (429), or answers with anything but success.
  */
 export async function fetchLivePings(query: Readonly<LiveQuery>, signal: AbortSignal): Promise<LivePing[]> {
-  const response = await fetch(`${API_BASE_URL}/lat/${query.lat.toFixed(COORDINATE_DECIMALS)}/lon/${query.lon.toFixed(COORDINATE_DECIMALS)}/dist/${String(Math.ceil(query.radiusKm))}`, {
-    headers: { 'X-Api-Key': query.apiKey },
-    signal,
-  });
+  const radiusNm = Math.min(Math.ceil(query.radiusKm / KM_PER_NM), MAX_RADIUS_NM);
+  const response = await fetch(`${RELAY_BASE_URL}/v2/point/${query.lat.toFixed(COORDINATE_DECIMALS)}/${query.lon.toFixed(COORDINATE_DECIMALS)}/${String(radiusNm)}`, { signal });
   if (!response.ok) {
     const retryAfter = Number(response.headers.get('Retry-After'));
     throw new LiveFeedError(describeRefusal(response.status), {
       retryAfterSec: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
-      fatal: response.status === HTTP_UNAUTHORIZED || response.status === HTTP_FORBIDDEN,
+      fatal: response.status === HTTP_NOT_FOUND,
     });
   }
 
@@ -196,19 +193,17 @@ export async function fetchLivePings(query: Readonly<LiveQuery>, signal: AbortSi
 }
 
 /**
- * Says what an HTTP status from the service means to the person who set up the feed.
+ * Says what an HTTP status from the relay means to the person using the feed.
  * @param status - The response status.
  * @returns A sentence naming the likely cause.
  */
 function describeRefusal(status: number): string {
   switch (status) {
-    case HTTP_UNAUTHORIZED:
-      return 'The live feed refused the key. Check that it is copied in full.';
-    case HTTP_FORBIDDEN:
-      return `The live feed refused the request: the key is wrong or the search radius is more than the plan allows (${String(FREE_PLAN_MAX_RADIUS_KM)} km on the free plan).`;
+    case HTTP_NOT_FOUND:
+      return 'The live relay does not serve this query. The page and the relay disagree about what is allowed, so the feed stopped.';
     case HTTP_TOO_MANY_REQUESTS:
-      return 'The live feed is rate limiting this key and will be asked again shortly.';
+      return 'The live relay is being rate limited and will be asked again shortly.';
     default:
-      return `The live feed answered with status ${String(status)}.`;
+      return `The live relay answered with status ${String(status)}.`;
   }
 }

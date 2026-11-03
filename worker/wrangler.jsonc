@@ -1,0 +1,8 @@
+// Cloudflare config for the live ADS-B relay: a script-only Worker with no bindings.
+// Deploy from the repository root with `pnpm deploy:worker`.
+{
+  "compatibility_date": "2026-11-01",
+  "main": "relay.ts",
+  "name": "doppler-adsb-relay",
+  "workers_dev": true,
+}

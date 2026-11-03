@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LIVE_WINDOW_SEC, LiveTrackBook, type LivePing, fetchLivePings, liveDataset, livePingsFromResponse } from './live-adsb';
+import { LIVE_WINDOW_SEC, LiveTrackBook, type LivePing, RELAY_BASE_URL, fetchLivePings, liveDataset, livePingsFromResponse } from './live-adsb';
+import { MAX_RADIUS_NM } from './live-limits';
 import { DopplerDatasetSchema } from './schemas';
 
 /** Epoch seconds of 2026-09-08T10:00:00Z, an arbitrary fixed poll time. */
@@ -21,7 +22,7 @@ function eastboundPings(icao: string, count: number, stepSec: number, typeCode: 
 describe('livePingsFromResponse', () => {
   it('dates each ping by when its position was last updated and skips aircraft without one', () => {
     const pings = livePingsFromResponse({
-      now: NOW,
+      now: NOW * 1000,
       ac: [
         { hex: 'abc123', r: 'G-ABCD', t: 'C172', lat: 51.75, lon: -1.3, alt_baro: 1500, seen_pos: 4 },
         { hex: 'def456', lat: 51.8, lon: -1.2, alt_baro: 'ground' },
@@ -93,27 +94,25 @@ describe('liveDataset', () => {
 });
 
 describe('fetchLivePings', () => {
-  const query = { apiKey: 'test-key', lat: 51.75, lon: -1.26, radiusKm: 120.2 };
+  const query = { lat: 51.75, lon: -1.26, radiusKm: 120.2 };
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('asks for the area with the key in a header and reads the answer', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ now: NOW, ac: [{ hex: 'abc123', lat: 51.7, lon: -1.2, alt_baro: 900 }] }));
+  it('asks the relay for the area in nautical miles, capped at what the relay forwards, and reads the answer', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => Promise.resolve(Response.json({ now: NOW * 1000, ac: [{ hex: 'abc123', lat: 51.7, lon: -1.2, alt_baro: 900 }] })));
     vi.stubGlobal('fetch', fetchMock);
 
     const pings = await fetchLivePings(query, new AbortController().signal);
+    await fetchLivePings({ ...query, radiusKm: 5000 }, new AbortController().signal);
 
     expect(pings).toHaveLength(1);
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('https://api.flyitalyadsb.com/v2/lat/51.7500/lon/-1.2600/dist/121');
-    expect(new Headers(init?.headers).get('X-Api-Key')).toBe('test-key');
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([`${RELAY_BASE_URL}/v2/point/51.75/-1.26/65`, `${RELAY_BASE_URL}/v2/point/51.75/-1.26/${String(MAX_RADIUS_NM)}`]);
   });
 
-  it('treats a refused key as fatal', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response('', { status: 403 })));
+  it('treats a query the relay refuses as fatal', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response('', { status: 404 })));
 
     await expect(fetchLivePings(query, new AbortController().signal)).rejects.toMatchObject({ fatal: true });
   });

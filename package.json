@@ -18,6 +18,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
+    "@cloudflare/workers-types": "5.20261027.1",
     "@commitlint/cli": "21.2.3",
     "@commitlint/config-conventional": "21.2.3",
     "@eslint/js": "10.0.1",
@@ -44,7 +45,8 @@
     "tsx": "4.23.15",
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.1",
-    "vitest": "5.0.4"
+    "vitest": "5.0.4",
+    "wrangler": "4.154.0"
   },
   "engines": {
     "node": ">=22"
@@ -91,6 +93,7 @@
   },
   "scripts": {
     "build": "tsdown",
+    "deploy:worker": "wrangler deploy --config worker/wrangler.jsonc",
     "lint": "eslint . --fix --cache --max-warnings 0",
     "lint:check": "eslint . --cache --max-warnings 0",
     "prepare": "husky",
@@ -98,7 +101,7 @@
     "site": "tsx site/build.ts",
     "test": "vitest run",
     "test:e2e": "pnpm run build && pnpm run site && playwright test",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json && tsc -p tsconfig.site.json && tsc -p tsconfig.sw.json && tsc -p tsconfig.e2e.json"
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json && tsc -p tsconfig.site.json && tsc -p tsconfig.sw.json && tsc -p tsconfig.worker.json && tsc -p tsconfig.e2e.json"
   },
   "sideEffects": [
     "**/*.css.ts"
