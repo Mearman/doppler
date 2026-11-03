@@ -13,6 +13,35 @@ import type {
 } from '../schemas';
 
 /**
+ * Residual size, in standard deviations, at which the score stops growing: a measurement further out than this is an outlier whatever its distance, so one gross mismatch cannot outweigh the rest of the evidence. Five sigma keeps a gross mismatch (ten sigma) costlier than a modest one (three sigma), which a three-sigma cap would score alike.
+ */
+const OUTLIER_SIGMAS = 5;
+
+/**
+ * Residual size, in standard deviations, beyond which a candidate is not admitted for a measurement: the conventional three-sigma gate.
+ */
+const ADMISSION_SIGMAS = 3;
+
+/**
+ * Standard deviation, in m/s, of the along-track wind. The Doppler fit measures speed through the air and ADS-B reports speed over the ground, so the two differ by the wind component along the track; a 5 m/s (about 10 knot) spread covers ordinary conditions.
+ */
+const WIND_SIGMA_MPS = 5;
+
+/**
+ * Largest speed difference, in m/s, that a segment may have from a measured Doppler speed and still be a candidate: the admission gate applied to the wind spread.
+ */
+export const MAX_ALONG_TRACK_WIND_MPS = ADMISSION_SIGMAS * WIND_SIGMA_MPS;
+
+/**
+ * Log-likelihood cost of leaving an observation unmatched. An observation that no segment explains contributes every residual term it would have had (one slant residual, one speed residual and one frequency residual per ridge point) at the outlier gate, so a hypothesis cannot outscore a rival by ignoring evidence: a poor fit costs at most this much, and an omission costs exactly this much.
+ * @param observation - The observation a hypothesis does not explain.
+ * @returns A non-negative amount to subtract from the hypothesis's log-posterior.
+ */
+export function unmatchedObservationLogPenalty(observation: Readonly<DopplerObservation>): number {
+  return 0.5 * (2 + observation.ridgePoints.length) * OUTLIER_SIGMAS ** 2;
+}
+
+/**
  * Paired observation and flight segment constraint used during Gauss-Newton coordinate refinement.
  */
 export interface ObservationSegmentPair {
@@ -61,13 +90,22 @@ function evaluateResidualsAtEnuOffset(
     return { point, estimatedStartEpochSec: 0, residuals: [], rmsFreqResidualHz: 0 };
   }
 
-  // Estimate recording start epoch `T_0` as the weighted mean of (cpaDelayedEpochSec - obs.cpaTimeSec)
-  let sumStartEpoch = 0;
+  // Observation times are relative to their own episode's clock, and episodes (separate files, resumed sessions) share none. Timing therefore links only observations within one episode, each measured against the first pair of its own episode.
+  const episodeReference = new Map<string, ObservationSegmentPair>();
   for (const pair of pairs) {
+    if (!episodeReference.has(pair.observation.episodeId)) {
+      episodeReference.set(pair.observation.episodeId, pair);
+    }
+  }
+  const sameClockPairs = pairs.filter((pair) => pair.observation.episodeId === firstPair.observation.episodeId);
+
+  // Estimate recording start epoch `T_0` as the mean of (cpaDelayedEpochSec - obs.cpaTimeSec) over the pairs on that clock
+  let sumStartEpoch = 0;
+  for (const pair of sameClockPairs) {
     const cpa = computeSegmentCpa(point, pair.segment, soundSpeedMps);
     sumStartEpoch += cpa.cpaDelayedEpochSec - pair.observation.cpaTimeSec;
   }
-  const estimatedStartEpochSec = sumStartEpoch / pairs.length;
+  const estimatedStartEpochSec = sumStartEpoch / sameClockPairs.length;
 
   const residuals: number[] = [];
   let freqSqSum = 0;
@@ -82,11 +120,16 @@ function evaluateResidualsAtEnuOffset(
     const slantSigma = Math.max(40, observation.kinematics.slantStdMeters);
     residuals.push(slantDiff / slantSigma);
 
-    // 2. Relative CPA arrival time residual across multiple flyovers (preserving purely physics-derived temporal offset)
-    if (pairs.length > 1) {
-      const firstCpa = computeSegmentCpa(point, firstPair.segment, soundSpeedMps);
+    // 1b. Speed residual: the observer position does not change it, so it carries no gradient, but it scores how well each segment's ground speed explains the measured speed, which ranks rival segments for the same flyover.
+    const speedSigma = Math.hypot(WIND_SIGMA_MPS, observation.kinematics.speedStdMps);
+    residuals.push((segment.groundspeedMps - observation.kinematics.inferredSpeedMps) / speedSigma);
+
+    // 2. Relative CPA arrival time residual across flyovers of one episode (preserving purely physics-derived temporal offset)
+    const reference = episodeReference.get(observation.episodeId);
+    if (reference !== undefined && reference !== pair) {
+      const firstCpa = computeSegmentCpa(point, reference.segment, soundSpeedMps);
       const modeledOffsetSec = cpa.cpaDelayedEpochSec - firstCpa.cpaDelayedEpochSec;
-      const observedOffsetSec = observation.cpaTimeSec - firstPair.observation.cpaTimeSec;
+      const observedOffsetSec = observation.cpaTimeSec - reference.observation.cpaTimeSec;
       const timeDiff = modeledOffsetSec - observedOffsetSec;
       residuals.push(timeDiff / 0.8);
     }
@@ -288,7 +331,8 @@ export function refineObserverCoordinateGaussNewton(
 
   const fisherInfo: readonly [number, number, number, number] = [jtj00, jtj01, jtj01, jtj11];
   const ellipse = fisherToConfidenceEllipse95(fisherInfo);
-  const logLikelihood = -0.5 * currentCost;
+  // The optimiser minimises plain squares, but the score caps each residual at the outlier gate so that a poor fit never costs more than leaving the flyover unexplained (`unmatchedObservationLogPenalty`).
+  const logLikelihood = -0.5 * currentEval.residuals.reduce((acc, r) => acc + Math.min(r * r, OUTLIER_SIGMAS ** 2), 0);
 
   return {
     lat: currentEval.point.lat,

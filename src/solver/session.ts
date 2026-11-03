@@ -8,6 +8,7 @@ import type {
   DopplerDataset,
   DopplerObservation,
   GeoPoint3D,
+  HypothesisMatch,
   LinearFlightSegment,
   ListeningEpisode,
   LocationHypothesis,
@@ -19,9 +20,13 @@ import {
   matchesSearchConstraints,
 } from './constellation';
 import {
-  fisherToConfidenceEllipse95,
+  MAX_ALONG_TRACK_WIND_MPS,
   refineObserverCoordinateGaussNewton,
+  unmatchedObservationLogPenalty,
 } from './gauss-newton';
+
+/** Hypotheses kept after ranking, which bounds the work each further flyover costs. */
+const MAX_HYPOTHESES = 15;
 
 /**
  * Options for configuring or resuming a Doppler geolocation session.
@@ -212,13 +217,29 @@ export class DopplerSessionEngine {
   }
 
   /**
-   * Ingests a new extracted DopplerObservation and performs sequential Bayesian refinement.
+   * Ingests an extracted DopplerObservation and performs sequential Bayesian refinement.
    *
    * - First flyover: creates candidate hypotheses along matching flight track cylinders.
    * - Second flyover: queries constellation hash index or pairs with existing observation to collapse candidates to curve intersections.
-   * - Third+ flyovers: accumulates Fisher Information matrix (I_total = sum I_k) and tightens confidence ellipses (shrinking O(1/sqrt(N))).
+   * - Third+ flyovers: refits each surviving hypothesis on every flyover it explains, so the Fisher Information matrix is that of the joint fit (shrinking O(1/sqrt(N))) and no flyover is counted twice.
+   *
+   * An observation whose id was ingested before replaces it, and the hypotheses are rebuilt from the whole list: a live listener re-reports a growing flyover under one id, and the latest report must not stack on the earlier ones.
    */
   public ingestObservation(obs: Readonly<DopplerObservation>): LocationSession {
+    const index = this.session.observations.findIndex((existing) => existing.id === obs.id);
+    if (index === -1) {
+      return this.applyObservation(obs);
+    }
+    const observations = this.session.observations.map((existing, position) => (position === index ? obs : existing));
+    this.session = { ...this.session, observations: [], hypotheses: [] };
+    for (const observation of observations) {
+      this.applyObservation(observation);
+    }
+
+    return this.session;
+  }
+
+  private applyObservation(obs: Readonly<DopplerObservation>): LocationSession {
     const soundSpeedMps = speedOfSoundAtTempMps(this.session.ambientTempCelsius);
     const existingObs = this.session.observations;
     const allObs = [...existingObs, obs];
@@ -228,19 +249,16 @@ export class DopplerSessionEngine {
     if (existingObs.length === 0) {
       // Single flyover observation: find candidate segments whose speed and altitude profile match inferred kinematics
       newHypotheses = this.spawnInitialHypotheses(obs, soundSpeedMps);
+    } else if (this.session.hypotheses.length === 0) {
+      // Re-seed from the constellation hash table, pairing with the latest flyover on the same clock: a time gap is meaningful only within one episode.
+      const prevObs = existingObs.findLast((candidate) => candidate.episodeId === obs.episodeId);
+      newHypotheses =
+        prevObs === undefined
+          ? this.spawnInitialHypotheses(obs, soundSpeedMps)
+          : this.matchConstellations({ obsA: prevObs, obsB: obs, allObs }, soundSpeedMps);
     } else {
-      // Pair with the most recent flyover to form a 2-event constellation
-      const prevObs = existingObs[existingObs.length - 1];
-      if (prevObs !== undefined) {
-        const deltaSec = obs.cpaTimeSec - prevObs.cpaTimeSec;
-        if (this.session.hypotheses.length === 0) {
-          // Re-seed from constellation hash table
-          newHypotheses = this.matchConstellations(prevObs, obs, deltaSec, soundSpeedMps);
-        } else {
-          // Sequentially refine existing hypotheses by fusing the new observation
-          newHypotheses = this.refineExistingHypotheses(obs, soundSpeedMps);
-        }
-      }
+      // Sequentially refine existing hypotheses by fusing the new observation
+      newHypotheses = this.refineExistingHypotheses(obs, soundSpeedMps);
     }
 
     // Apply active constraints
@@ -273,6 +291,26 @@ export class DopplerSessionEngine {
   }
 
   /**
+   * Log-posterior of a hypothesis: the joint fit of the flyovers it explains, less the cost of every flyover it leaves unexplained.
+   */
+  private static scoreHypothesis(
+    fitLogLikelihood: number,
+    allObs: readonly Readonly<DopplerObservation>[],
+    matches: readonly Readonly<HypothesisMatch>[],
+  ): number {
+    const unexplained = allObs.filter((obs) => !matches.some((match) => match.observationId === obs.id));
+
+    return fitLogLikelihood - unexplained.reduce((total, obs) => total + unmatchedObservationLogPenalty(obs), 0);
+  }
+
+  /**
+   * Allowed speed difference between a measured Doppler speed and a segment's ground speed, which differ by the along-track wind.
+   */
+  private static speedTolerance(kinematics: Readonly<DopplerObservation['kinematics']>): number {
+    return Math.max(MAX_ALONG_TRACK_WIND_MPS, kinematics.speedStdMps * 2.5);
+  }
+
+  /**
    * Generates initial candidate hypotheses along flight tracks matching a single flyover.
    */
   private spawnInitialHypotheses(
@@ -281,7 +319,7 @@ export class DopplerSessionEngine {
   ): LocationHypothesis[] {
     const candidates: LocationHypothesis[] = [];
     const targetSpeed = obs.kinematics.inferredSpeedMps;
-    const speedTolerance = Math.max(5.0, obs.kinematics.speedStdMps * 2.5);
+    const speedTolerance = DopplerSessionEngine.speedTolerance(obs.kinematics);
 
     for (const seg of this.dataset.segments) {
       if (seg.category === 'jet') {
@@ -321,26 +359,32 @@ export class DopplerSessionEngine {
         ellipseSemiMajorMeters: refined.ellipseSemiMajorMeters,
         ellipseSemiMinorMeters: refined.ellipseSemiMinorMeters,
         ellipseBearingDeg: refined.ellipseBearingDeg,
-        matchedSegmentIds: [seg.id],
+        matches: [{ observationId: obs.id, segmentId: seg.id }],
       });
     }
 
-    return candidates.slice(0, 15);
+    return DopplerSessionEngine.keepBest(candidates);
+  }
+
+  /**
+   * Keeps the best-scoring hypotheses. Ranking comes before the cut: dataset order says nothing about fit, so cutting first can discard the true track.
+   */
+  private static keepBest(candidates: readonly LocationHypothesis[]): LocationHypothesis[] {
+    return [...candidates].sort((a, b) => b.logPosterior - a.logPosterior).slice(0, MAX_HYPOTHESES);
   }
 
   /**
    * Matches candidate constellations from the Shazam-style hash table.
    */
   private matchConstellations(
-    obsA: Readonly<DopplerObservation>,
-    obsB: Readonly<DopplerObservation>,
-    deltaSec: number,
+    flyovers: { readonly obsA: Readonly<DopplerObservation>; readonly obsB: Readonly<DopplerObservation>; readonly allObs: readonly Readonly<DopplerObservation>[] },
     soundSpeedMps: number,
   ): LocationHypothesis[] {
+    const { obsA, obsB, allObs } = flyovers;
     const keys = expandConstellationQueryKeys(
       obsA.kinematics.inferredSpeedMps,
       obsB.kinematics.inferredSpeedMps,
-      deltaSec,
+      obsB.cpaTimeSec - obsA.cpaTimeSec,
     );
 
     const matchedEntries = this.dataset.constellations.filter((c) => keys.has(c.hashKey));
@@ -364,6 +408,10 @@ export class DopplerSessionEngine {
         ],
         { demGrid: this.dataset.elevationGrid, soundSpeedMps },
       );
+      const matches: HypothesisMatch[] = [
+        { observationId: obsA.id, segmentId: segA.id },
+        { observationId: obsB.id, segmentId: segB.id },
+      ];
 
       candidates.push({
         id: `hyp_${entry.segmentIdA}_${entry.segmentIdB}`,
@@ -373,28 +421,30 @@ export class DopplerSessionEngine {
         lon: refined.lon,
         altMeters: refined.altMeters,
         estimatedStartEpochSec: refined.estimatedStartEpochSec,
-        logPosterior: refined.logLikelihood,
+        logPosterior: DopplerSessionEngine.scoreHypothesis(refined.logLikelihood, allObs, matches),
         probability: 0,
         rmsFreqResidualHz: refined.rmsFreqResidualHz,
         fisherInfo: refined.fisherInfo,
         ellipseSemiMajorMeters: refined.ellipseSemiMajorMeters,
         ellipseSemiMinorMeters: refined.ellipseSemiMinorMeters,
         ellipseBearingDeg: refined.ellipseBearingDeg,
-        matchedSegmentIds: [segA.id, segB.id],
+        matches,
       });
     }
 
-    return candidates.slice(0, 15);
+    return DopplerSessionEngine.keepBest(candidates);
   }
 
   /**
-   * Sequentially refines existing candidate hypotheses by incorporating a new observation into their Fisher Information matrix and Gauss-Newton solver.
+   * Sequentially refines existing candidate hypotheses by refitting each on every flyover it explains, the new one included.
    */
   private refineExistingHypotheses(
     newObs: Readonly<DopplerObservation>,
     soundSpeedMps: number,
   ): LocationHypothesis[] {
     const refinedList: LocationHypothesis[] = [];
+    const allObs = [...this.session.observations, newObs];
+    const observationsById = new Map(allObs.map((obs) => [obs.id, obs]));
 
     for (const hyp of this.session.hypotheses) {
       // Find matching segment for newObs in the candidate's vicinity
@@ -402,23 +452,28 @@ export class DopplerSessionEngine {
       let bestSeg: LinearFlightSegment | null = null;
       let minSlantDiff = Infinity;
 
-      const firstSeg = this.segmentsById.get(hyp.matchedSegmentIds[0] ?? '');
-      const firstCpa = firstSeg !== undefined ? computeSegmentCpa(hypCoord, firstSeg, soundSpeedMps) : null;
-      const expectedDeltaSec = newObs.cpaTimeSec - (this.session.observations[0]?.cpaTimeSec ?? 0);
+      const firstMatch = hyp.matches[0];
+      const firstSeg = firstMatch === undefined ? undefined : this.segmentsById.get(firstMatch.segmentId);
+      const firstObs = firstMatch === undefined ? undefined : observationsById.get(firstMatch.observationId);
+      const firstCpa = firstSeg === undefined ? null : computeSegmentCpa(hypCoord, firstSeg, soundSpeedMps);
+      // The arrival-time gap is checkable only against a flyover recorded on the same clock.
+      const timingReference = firstCpa !== null && firstObs?.episodeId === newObs.episodeId ? { firstCpa, firstObs } : null;
+      const speedTolerance = DopplerSessionEngine.speedTolerance(newObs.kinematics);
 
       for (const seg of this.dataset.segments) {
         if (seg.dateIso !== hyp.dateIso || seg.category === 'jet') {
           continue;
         }
-        if (hyp.matchedSegmentIds.includes(seg.id)) {
+        if (hyp.matches.some((match) => match.segmentId === seg.id)) {
           continue;
         }
-        if (Math.abs(seg.groundspeedMps - newObs.kinematics.inferredSpeedMps) > 18) {
+        if (Math.abs(seg.groundspeedMps - newObs.kinematics.inferredSpeedMps) > speedTolerance) {
           continue;
         }
         const cpa = computeSegmentCpa(hypCoord, seg, soundSpeedMps);
-        if (firstCpa !== null) {
-          const actualDeltaSec = cpa.cpaDelayedEpochSec - firstCpa.cpaDelayedEpochSec;
+        if (timingReference !== null) {
+          const expectedDeltaSec = newObs.cpaTimeSec - timingReference.firstObs.cpaTimeSec;
+          const actualDeltaSec = cpa.cpaDelayedEpochSec - timingReference.firstCpa.cpaDelayedEpochSec;
           if (Math.abs(actualDeltaSec - expectedDeltaSec) > 30) {
             continue;
           }
@@ -431,43 +486,29 @@ export class DopplerSessionEngine {
       }
 
       if (bestSeg === null) {
-        // Hyp does not match new flyover; down-weight likelihood
+        // The hypothesis does not explain the new flyover: it pays the cost of leaving it unexplained.
         refinedList.push({
           ...hyp,
-          logPosterior: hyp.logPosterior - 8.0,
+          logPosterior: hyp.logPosterior - unmatchedObservationLogPenalty(newObs),
         });
         continue;
       }
 
-      // Re-run Gauss-Newton with all paired observations
-      const existingPairs = hyp.matchedSegmentIds
-        .map((segId, i) => {
-          const seg = this.segmentsById.get(segId);
-          const obs = this.session.observations[i];
-          if (seg !== undefined && obs !== undefined) {
-            return { observation: obs, segment: seg };
-          }
+      // Refit on every flyover the hypothesis explains, found by observation id
+      const matches: HypothesisMatch[] = [...hyp.matches, { observationId: newObs.id, segmentId: bestSeg.id }];
+      const pairs = matches.flatMap((match) => {
+        const observation = observationsById.get(match.observationId);
+        const segment = this.segmentsById.get(match.segmentId);
 
-          return null;
-        })
-        .filter((p): p is { observation: DopplerObservation; segment: LinearFlightSegment } => p !== null);
+        return observation !== undefined && segment !== undefined ? [{ observation, segment }] : [];
+      });
 
-      const allPairs = [...existingPairs, { observation: newObs, segment: bestSeg }];
-
+      // The refit is over all pairs, so its log-likelihood and Fisher Information replace the hypothesis's earlier ones: adding them would count each earlier flyover again.
       const refined = refineObserverCoordinateGaussNewton(
         hypCoord,
-        allPairs,
+        pairs,
         { demGrid: this.dataset.elevationGrid, soundSpeedMps },
       );
-
-      // Accumulate Fisher Information matrices: I_total = I_old + I_new
-      const totalFisher: readonly [number, number, number, number] = [
-        hyp.fisherInfo[0] + refined.fisherInfo[0],
-        hyp.fisherInfo[1] + refined.fisherInfo[1],
-        hyp.fisherInfo[2] + refined.fisherInfo[2],
-        hyp.fisherInfo[3] + refined.fisherInfo[3],
-      ];
-      const ellipse = fisherToConfidenceEllipse95(totalFisher);
 
       refinedList.push({
         ...hyp,
@@ -475,13 +516,13 @@ export class DopplerSessionEngine {
         lon: refined.lon,
         altMeters: refined.altMeters,
         estimatedStartEpochSec: refined.estimatedStartEpochSec,
-        logPosterior: hyp.logPosterior + refined.logLikelihood,
+        logPosterior: DopplerSessionEngine.scoreHypothesis(refined.logLikelihood, allObs, matches),
         rmsFreqResidualHz: refined.rmsFreqResidualHz,
-        fisherInfo: totalFisher,
-        ellipseSemiMajorMeters: ellipse.ellipseSemiMajorMeters,
-        ellipseSemiMinorMeters: ellipse.ellipseSemiMinorMeters,
-        ellipseBearingDeg: ellipse.ellipseBearingDeg,
-        matchedSegmentIds: [...hyp.matchedSegmentIds, bestSeg.id],
+        fisherInfo: refined.fisherInfo,
+        ellipseSemiMajorMeters: refined.ellipseSemiMajorMeters,
+        ellipseSemiMinorMeters: refined.ellipseSemiMinorMeters,
+        ellipseBearingDeg: refined.ellipseBearingDeg,
+        matches,
       });
     }
 
