@@ -64,6 +64,12 @@ export function dbToRgb(powerDb: number, options: DbColorOptions = {}): readonly
   return [Math.round(245 + 10 * s), Math.round(158 + 97 * s), Math.round(11 + 244 * s)] as const;
 }
 
+/** Plot margins in CSS pixels, shared by drawing and pointer hit-testing so the two cannot drift. */
+const LEFT_MARGIN = 46;
+const RIGHT_MARGIN = 12;
+const TOP_MARGIN = 10;
+const BOTTOM_MARGIN = 22;
+
 export function SpectrogramViewer({
   liveFrames,
   clipSpectrogram,
@@ -104,13 +110,8 @@ export function SpectrogramViewer({
     }
     ctx.scale(dpr, dpr);
 
-    const leftMargin = 46;
-    const rightMargin = 12;
-    const topMargin = 10;
-    const bottomMargin = 22;
-
-    const plotWidth = Math.max(10, width - leftMargin - rightMargin);
-    const plotHeight = Math.max(10, height - topMargin - bottomMargin);
+    const plotWidth = Math.max(10, width - LEFT_MARGIN - RIGHT_MARGIN);
+    const plotHeight = Math.max(10, height - TOP_MARGIN - BOTTOM_MARGIN);
 
     // Dark background
     ctx.fillStyle = '#0a0a0f';
@@ -169,7 +170,14 @@ export function SpectrogramViewer({
         }
       }
 
-      ctx.putImageData(imgData, leftMargin, topMargin);
+      // putImageData ignores the context transform, so the pixels go through an offscreen canvas and drawImage, which applies the devicePixelRatio scale like every other drawing call here.
+      const plotLayer = document.createElement('canvas');
+      plotLayer.width = plotWidth;
+      plotLayer.height = plotHeight;
+      plotLayer.getContext('2d')?.putImageData(imgData, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(plotLayer, LEFT_MARGIN, TOP_MARGIN);
+      ctx.imageSmoothingEnabled = true;
 
       // Draw Grid & Frequency Axes
       ctx.lineWidth = 1;
@@ -182,7 +190,7 @@ export function SpectrogramViewer({
         if (f < minFreq || f > maxFreq) {
           continue;
         }
-        const y = topMargin + (1 - (f - minFreq) / (maxFreq - minFreq)) * plotHeight;
+        const y = TOP_MARGIN + (1 - (f - minFreq) / (maxFreq - minFreq)) * plotHeight;
 
         // Special highlight for 50 Hz and 60 Hz mains hum lines
         if (f === 50 || f === 60) {
@@ -194,12 +202,12 @@ export function SpectrogramViewer({
         }
 
         ctx.beginPath();
-        ctx.moveTo(leftMargin, y);
-        ctx.lineTo(leftMargin + plotWidth, y);
+        ctx.moveTo(LEFT_MARGIN, y);
+        ctx.lineTo(LEFT_MARGIN + plotWidth, y);
         ctx.stroke();
 
         ctx.fillStyle = f === 50 || f === 60 ? '#facc15' : '#888896';
-        ctx.fillText(`${String(f)}Hz`, leftMargin - 5, y);
+        ctx.fillText(`${String(f)}Hz`, LEFT_MARGIN - 5, y);
       }
       ctx.setLineDash([]);
 
@@ -210,17 +218,17 @@ export function SpectrogramViewer({
 
       const tickCount = 6;
       for (let i = 0; i <= tickCount; i += 1) {
-        const x = leftMargin + (i / tickCount) * plotWidth;
+        const x = LEFT_MARGIN + (i / tickCount) * plotWidth;
         const tickSec = isClipActive ? (i / tickCount) * timeSpan : -timeSpan + (i / tickCount) * timeSpan;
 
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
         ctx.beginPath();
-        ctx.moveTo(x, topMargin + plotHeight);
-        ctx.lineTo(x, topMargin + plotHeight + 4);
+        ctx.moveTo(x, TOP_MARGIN + plotHeight);
+        ctx.lineTo(x, TOP_MARGIN + plotHeight + 4);
         ctx.stroke();
 
         const label = isClipActive ? `${tickSec.toFixed(0)}s` : `${tickSec.toFixed(0)}s`;
-        ctx.fillText(label, x, topMargin + plotHeight + 6);
+        ctx.fillText(label, x, TOP_MARGIN + plotHeight + 6);
       }
 
       // Draw Detected Doppler Ridge Overlays
@@ -238,9 +246,9 @@ export function SpectrogramViewer({
         let started = false;
         for (const pt of obs.ridgePoints) {
           const ptTimeRel = pt.timeSec - startTime;
-          const x = leftMargin + (ptTimeRel / timeSpan) * plotWidth;
-          const y = topMargin + (1 - (pt.freqHz - minFreq) / (maxFreq - minFreq)) * plotHeight;
-          const isWithin = x >= leftMargin && x <= leftMargin + plotWidth && y >= topMargin && y <= topMargin + plotHeight;
+          const x = LEFT_MARGIN + (ptTimeRel / timeSpan) * plotWidth;
+          const y = TOP_MARGIN + (1 - (pt.freqHz - minFreq) / (maxFreq - minFreq)) * plotHeight;
+          const isWithin = x >= LEFT_MARGIN && x <= LEFT_MARGIN + plotWidth && y >= TOP_MARGIN && y <= TOP_MARGIN + plotHeight;
           if (!isWithin) {
             continue;
           }
@@ -256,10 +264,10 @@ export function SpectrogramViewer({
 
         // Draw CPA target marker
         const cpaRel = obs.cpaTimeSec - startTime;
-        const cpaX = leftMargin + (cpaRel / timeSpan) * plotWidth;
-        const cpaY = topMargin + (1 - (obs.kinematics.baseFreqHz - minFreq) / (maxFreq - minFreq)) * plotHeight;
+        const cpaX = LEFT_MARGIN + (cpaRel / timeSpan) * plotWidth;
+        const cpaY = TOP_MARGIN + (1 - (obs.kinematics.baseFreqHz - minFreq) / (maxFreq - minFreq)) * plotHeight;
 
-        if (cpaX >= leftMargin && cpaX <= leftMargin + plotWidth && cpaY >= topMargin && cpaY <= topMargin + plotHeight) {
+        if (cpaX >= LEFT_MARGIN && cpaX <= LEFT_MARGIN + plotWidth && cpaY >= TOP_MARGIN && cpaY <= TOP_MARGIN + plotHeight) {
           ctx.strokeStyle = '#38bdf8';
           ctx.lineWidth = 1.5;
           ctx.beginPath();
@@ -290,7 +298,7 @@ export function SpectrogramViewer({
     // Border around plot
     ctx.strokeStyle = '#282836';
     ctx.lineWidth = 1;
-    ctx.strokeRect(leftMargin, topMargin, plotWidth, plotHeight);
+    ctx.strokeRect(LEFT_MARGIN, TOP_MARGIN, plotWidth, plotHeight);
   }, [liveFrames, clipSpectrogram, observations, isListening, isClipActive, isExpanded]);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>): void => {
@@ -302,20 +310,16 @@ export function SpectrogramViewer({
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    const leftMargin = 46;
-    const rightMargin = 12;
-    const topMargin = 10;
-    const bottomMargin = 22;
-    const plotWidth = rect.width - leftMargin - rightMargin;
-    const plotHeight = rect.height - topMargin - bottomMargin;
+    const plotWidth = rect.width - LEFT_MARGIN - RIGHT_MARGIN;
+    const plotHeight = rect.height - TOP_MARGIN - BOTTOM_MARGIN;
 
-    if (x >= leftMargin && x <= leftMargin + plotWidth && y >= topMargin && y <= topMargin + plotHeight) {
+    if (x >= LEFT_MARGIN && x <= LEFT_MARGIN + plotWidth && y >= TOP_MARGIN && y <= TOP_MARGIN + plotHeight) {
       const minFreq = isClipActive ? clipSpectrogram.minFreqHz : 50;
       const maxFreq = isClipActive ? clipSpectrogram.maxFreqHz : 500;
-      const freqNorm = 1 - (y - topMargin) / plotHeight;
+      const freqNorm = 1 - (y - TOP_MARGIN) / plotHeight;
       const freqHz = minFreq + freqNorm * (maxFreq - minFreq);
 
-      const timeNorm = (x - leftMargin) / plotWidth;
+      const timeNorm = (x - LEFT_MARGIN) / plotWidth;
       // Nominal scale in seconds
       const timeSec = timeNorm * 120;
 
