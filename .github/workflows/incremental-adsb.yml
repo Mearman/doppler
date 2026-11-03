@@ -2,14 +2,21 @@ name: Incremental Daily ADS-B Trajectory Pipeline
 
 on:
   schedule:
-    # Run daily at 03:00 UTC
-    - cron: '0 3 * * *'
+    # adsb.lol publishes each UTC day's archive about 03:27 UTC the next day, so a 03:00 run would look for a release that does not exist yet.
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       target_date:
         description: 'Specific date to ingest (YYYY-MM-DD), or leave blank for yesterday'
         required: false
         type: string
+      bbox:
+        description: 'Region to keep as minLat,minLon,maxLat,maxLon, or leave blank for the United Kingdom'
+        required: false
+        type: string
+
+permissions:
+  contents: read
 
 concurrency:
   group: adsb-ingest-${{ github.ref }}
@@ -18,6 +25,7 @@ concurrency:
 jobs:
   ingest:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -37,6 +45,8 @@ jobs:
       - name: Ingest and Compress Trajectories
         env:
           TARGET_DATE: ${{ inputs.target_date }}
+          # A day filtered to this box measured about 2.1 GB of peak memory. The whole world has not been run on a runner, and before region filtering existed the ingest ran out of memory at 4 GB, so the scheduled run keeps one region.
+          BBOX: ${{ inputs.bbox || '49.5,-8,59,2' }}
         run: |
           set -euo pipefail
           DATE="${TARGET_DATE:-$(date -u -d 'yesterday' +%Y-%m-%d)}"
@@ -47,5 +57,14 @@ jobs:
           echo "Processing ADS-B trajectories for ${DATE}..."
           # Streams through memory: drops jets and cruise altitudes, simplifies each run to 4D-RDP segments, builds the constellation index and writes the dataset.
           curl --fail --silent --show-error --location "${BASE}.aa" "${BASE}.ab" \
-            | node dist-cli/doppler.mjs ingest --input - --out "${DATE}.dataset.json"
+            | node dist-cli/doppler.mjs ingest --input - --out "${DATE}.dataset.json" --bbox "${BBOX}"
           ls -l "${DATE}.dataset.json"
+          echo "DATASET_FILE=${DATE}.dataset.json" >> "$GITHUB_ENV"
+
+      # The dataset repository holds one file per UTC day under a licence that matches the source (ODbL), described by its README. The token is a fine-grained one for this purpose and exists only in this step's environment.
+      - name: Publish the dataset to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          pipx run --spec huggingface_hub==2.3.0 hf upload Mearman/doppler-adsb "${DATASET_FILE}" "${DATASET_FILE}" --repo-type dataset --commit-message "Add ${DATASET_FILE}"
