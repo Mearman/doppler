@@ -303,4 +303,21 @@ describe('DopplerSessionEngine hypothesis scoring', () => {
     // Summing each step's refit would count the first flyover three times and drift far from the single joint fit.
     expect(Math.abs(top.logPosterior - joint.logLikelihood)).toBeLessThan(1);
   });
+
+  it('seeds a new flyover from the segments when the constellation index has no pair for it', () => {
+    // A dataset built from traffic holds no precomputed pairs.
+    const engine = new DopplerSessionEngine({ dataset: { ...BUNDLED_DATASET, constellations: [] } });
+    const ep = engine.startEpisode(1788900000);
+    // The first flyover matches no segment, so nothing survives it and the second must start from scratch.
+    const base = alphaObservation({ id: 'stray', episodeId: ep.id });
+    engine.ingestObservation({ ...base, kinematics: { ...base.kinematics, inferredSpeedMps: 20 } });
+    expect(engine.getSession().hypotheses).toHaveLength(0);
+    engine.ingestObservation(alphaObservation({ id: 'real', episodeId: ep.id, cpaTimeSec: 600 }));
+
+    const top = engine.getSession().hypotheses[0];
+    expect(top?.matches).toEqual([{ observationId: 'real', segmentId: 'flyover_alpha' }]);
+    // The earlier flyover that nothing explains still costs the hypothesis.
+    expect(top?.logPosterior).toBeLessThan(-18);
+  });
 });
+
