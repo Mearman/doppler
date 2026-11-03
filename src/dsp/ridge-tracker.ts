@@ -1,6 +1,97 @@
 import { extractAsymptoticKinematics } from '../physics/algebra';
 import type { DopplerObservation, DopplerRidgePoint } from '../schemas';
+import { SPEED_OF_SOUND_MPS } from './constants';
 import type { DopplerSpectrogram } from './spectrogram';
+
+/**
+ * Default minimum per-frame peak signal-to-noise ratio in dB for a frame to join a ridge.
+ */
+const DEFAULT_MIN_SNR_DB = 6;
+
+/**
+ * Default minimum time in seconds between the first and last point of a ridge for it to count as a flyover.
+ */
+const DEFAULT_MIN_DURATION_SEC = 6;
+
+/**
+ * Default minimum drop in Hz from the approaching to the receding asymptote for a ridge to count as a Doppler S-curve rather than a steady tone.
+ */
+const DEFAULT_MIN_FREQ_DROP_HZ = 3.5;
+
+/**
+ * Extra signal-to-noise ratio in dB demanded of a frame flagged as noise-polluted, so that only strong peaks survive elevated noise.
+ */
+const NOISE_POLLUTED_SNR_PENALTY_DB = 4;
+
+/**
+ * Fewest candidate points, and fewest points in a ridge, from which a Doppler S-curve can be fitted.
+ */
+const MIN_RIDGE_POINTS = 5;
+
+/**
+ * Fewest consecutive frequency-continuous points that form a ridge worth keeping.
+ */
+const MIN_CLUSTER_POINTS = 8;
+
+/**
+ * Longest gap in seconds between consecutive points of one ridge.
+ */
+const MAX_TRACK_GAP_SEC = 1.5;
+
+/**
+ * Smallest frequency jump in Hz allowed between consecutive ridge points however short the gap between them.
+ */
+const MIN_TRACK_FREQ_JUMP_HZ = 10;
+
+/**
+ * Greatest frequency slew rate in Hz per second allowed between consecutive ridge points.
+ */
+const MAX_TRACK_SLEW_HZ_PER_SEC = 15;
+
+/**
+ * Fraction of a ridge's points at each end whose median frequency estimates the approaching and receding asymptotes.
+ */
+const EDGE_FRACTION = 0.22;
+
+/**
+ * Fewest points at each end of a ridge that are used to estimate an asymptote.
+ */
+const MIN_EDGE_POINTS = 2;
+
+/**
+ * Number of ridge points that earn one point of half-span on each side of the closest point of approach when measuring the inflection slope.
+ */
+const RIDGE_POINTS_PER_SLOPE_SPAN_POINT = 6;
+
+/**
+ * Greatest half-span in points on each side of the closest point of approach when measuring the inflection slope.
+ */
+const MAX_SLOPE_SPAN_POINTS = 3;
+
+/**
+ * Shortest time in seconds across which the inflection slope is measured, so that a ridge sampled very densely does not divide by a near-zero interval.
+ */
+const MIN_SLOPE_WINDOW_SEC = 0.25;
+
+/**
+ * Magnitude in Hz per second of the shallowest descent the measured inflection slope may have; a flatter or rising slope is replaced by the mean slope across the whole ridge.
+ */
+const MIN_DESCENT_SLOPE_HZ_PER_SEC = 0.02;
+
+/**
+ * Shortest time-scale in seconds of the closest-approach geometry that is assumed when extrapolating the asymptotes.
+ */
+const MIN_TAU_SEC = 1.5;
+
+/**
+ * Smallest value of `cosThetaMax`, the cosine of the angle between the aircraft's course and its line of sight at the ridge ends, that the asymptotic extrapolation divides by; it bounds the correction a short ridge can apply.
+ */
+const MIN_COS_THETA_MAX = 0.5;
+
+/**
+ * Lowest frequency in Hz that the extrapolated receding asymptote may take.
+ */
+const MIN_ASYMPTOTIC_LOW_HZ = 10;
 
 /**
  * Options for extracting Doppler S-curve observations from a spectrogram.
@@ -23,15 +114,15 @@ export function extractDopplerObservations(
   spectrogram: Readonly<DopplerSpectrogram>,
   options: Readonly<RidgeTrackerOptions>,
 ): DopplerObservation[] {
-  const minSnrDb = options.minSnrDb ?? 6.0;
-  const minDurationSec = options.minDurationSec ?? 6.0;
-  const minFreqDropHz = options.minFreqDropHz ?? 3.5;
-  const soundSpeedMps = options.soundSpeedMps ?? 343.0;
+  const minSnrDb = options.minSnrDb ?? DEFAULT_MIN_SNR_DB;
+  const minDurationSec = options.minDurationSec ?? DEFAULT_MIN_DURATION_SEC;
+  const minFreqDropHz = options.minFreqDropHz ?? DEFAULT_MIN_FREQ_DROP_HZ;
+  const soundSpeedMps = options.soundSpeedMps ?? SPEED_OF_SOUND_MPS;
 
   const candidatePoints: DopplerRidgePoint[] = [];
   for (const frame of spectrogram.frames) {
     // Allow high-SNR peaks even in mildly elevated noise, or standard SNR in quiet frames
-    const effectiveThreshold = frame.noisePolluted ? minSnrDb + 4.0 : minSnrDb;
+    const effectiveThreshold = frame.noisePolluted ? minSnrDb + NOISE_POLLUTED_SNR_PENALTY_DB : minSnrDb;
     if (frame.peakSnrDb >= effectiveThreshold) {
       candidatePoints.push({
         timeSec: frame.timeSec,
@@ -41,7 +132,7 @@ export function extractDopplerObservations(
     }
   }
 
-  if (candidatePoints.length < 5) {
+  if (candidatePoints.length < MIN_RIDGE_POINTS) {
     return [];
   }
 
@@ -60,17 +151,17 @@ export function extractDopplerObservations(
     }
     const dt = pt.timeSec - prev.timeSec;
     const df = Math.abs(pt.freqHz - prev.freqHz);
-    // Allow up to 1.5 seconds between frames and up to 15 Hz/sec maximum frequency derivative
-    if (dt <= 1.5 && df <= Math.max(10.0, 15.0 * dt)) {
+    // Allow a bounded gap between frames and a bounded frequency slew rate, with a floor on the jump so that adjacent frames are never rejected for jitter
+    if (dt <= MAX_TRACK_GAP_SEC && df <= Math.max(MIN_TRACK_FREQ_JUMP_HZ, MAX_TRACK_SLEW_HZ_PER_SEC * dt)) {
       currentCluster.push(pt);
     } else {
-      if (currentCluster.length >= 8) {
+      if (currentCluster.length >= MIN_CLUSTER_POINTS) {
         clusters.push(currentCluster);
       }
       currentCluster = [pt];
     }
   }
-  if (currentCluster.length >= 8) {
+  if (currentCluster.length >= MIN_CLUSTER_POINTS) {
     clusters.push(currentCluster);
   }
 
@@ -78,7 +169,7 @@ export function extractDopplerObservations(
 
   for (let idx = 0; idx < clusters.length; idx += 1) {
     const cluster = clusters[idx];
-    if (cluster === undefined || cluster.length < 5) {
+    if (cluster === undefined || cluster.length < MIN_RIDGE_POINTS) {
       continue;
     }
     const firstPt = cluster[0];
@@ -92,8 +183,8 @@ export function extractDopplerObservations(
       continue;
     }
 
-    // Compute robust asymptotic high (median of first 20% of points) and low (median of last 20% of points)
-    const edgeCount = Math.max(2, Math.floor(cluster.length * 0.22));
+    // Compute robust asymptotic high (median of the first `EDGE_FRACTION` of points) and low (median of the last `EDGE_FRACTION` of points)
+    const edgeCount = Math.max(MIN_EDGE_POINTS, Math.floor(cluster.length * EDGE_FRACTION));
     const headFreqs = cluster
       .slice(0, edgeCount)
       .map((p) => p.freqHz)
@@ -126,21 +217,21 @@ export function extractDopplerObservations(
     }
 
     const cpaPoint = cluster[cpaIdx] ?? firstPt;
-    const span = Math.max(1, Math.min(3, Math.floor(cluster.length / 6)));
+    const span = Math.max(1, Math.min(MAX_SLOPE_SPAN_POINTS, Math.floor(cluster.length / RIDGE_POINTS_PER_SLOPE_SPAN_POINT)));
     const leftPt = cluster[Math.max(0, cpaIdx - span)] ?? firstPt;
     const rightPt = cluster[Math.min(cluster.length - 1, cpaIdx + span)] ?? lastPt;
-    const dtSlope = Math.max(0.25, rightPt.timeSec - leftPt.timeSec);
+    const dtSlope = Math.max(MIN_SLOPE_WINDOW_SEC, rightPt.timeSec - leftPt.timeSec);
     const rawSlope = (rightPt.freqHz - leftPt.freqHz) / dtSlope;
-    const inflectionSlopeHzPerSec = rawSlope < -0.02 ? rawSlope : -(fHigh - fLow) / durationSec;
+    const inflectionSlopeHzPerSec = rawSlope < -MIN_DESCENT_SLOPE_HZ_PER_SEC ? rawSlope : -(fHigh - fLow) / durationSec;
 
     // Asymptotic extrapolation factor (since finite audio windows truncate the infinite asymptote by ~4-8%)
-    const halfDur = Math.max(1, 0.5 * durationSec);
-    const tauEst = Math.max(1.5, -(targetBaseFreq * ((fHigh - fLow) / (fHigh + fLow))) / inflectionSlopeHzPerSec);
+    const halfDur = Math.max(1, durationSec / 2);
+    const tauEst = Math.max(MIN_TAU_SEC, -(targetBaseFreq * ((fHigh - fLow) / (fHigh + fLow))) / inflectionSlopeHzPerSec);
     const cosThetaMax = halfDur / Math.hypot(halfDur, tauEst);
-    const halfSpread = (0.5 * (fHigh - fLow)) / Math.max(0.5, cosThetaMax);
-    const midFreq = 0.5 * (fHigh + fLow);
+    const halfSpread = ((fHigh - fLow) / 2) / Math.max(MIN_COS_THETA_MAX, cosThetaMax);
+    const midFreq = (fHigh + fLow) / 2;
     const asymptoticHighHz = midFreq + halfSpread;
-    const asymptoticLowHz = Math.max(10, midFreq - halfSpread);
+    const asymptoticLowHz = Math.max(MIN_ASYMPTOTIC_LOW_HZ, midFreq - halfSpread);
 
     const kinematics = extractAsymptoticKinematics({
       asymptoticHighHz,
