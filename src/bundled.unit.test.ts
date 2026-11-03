@@ -11,6 +11,15 @@ import {
 import { decodeWavBytes } from './dsp/wav';
 import { DopplerDataset } from './schemas';
 
+/** Seconds of audio the bundled generator renders, and the rate the test renders it at. */
+const BUNDLED_DURATION_SEC = 1120;
+const SYNTHESIS_RATE_HZ = 2000;
+/** The synthesis test renders the audio twice (once directly, once through the WAV helper). */
+const SYNTHESISED_SAMPLES = 2 * BUNDLED_DURATION_SEC * SYNTHESIS_RATE_HZ;
+/** Budget per rendered sample, in microseconds: far above the uncontended rate so that coverage instrumentation and a busy machine do not turn a slow run into a failure, while still scaling with the work. */
+const BUDGET_MICROSECONDS_PER_SAMPLE = 10;
+const SYNTHESIS_TEST_TIMEOUT_MS = (SYNTHESISED_SAMPLES * BUDGET_MICROSECONDS_PER_SAMPLE) / 1000;
+
 describe('Bundled Reference Dataset and Audio Synthesis', () => {
   it('validates bundled ground truth coordinates and DEM elevation grid', () => {
     expect(BUNDLED_GROUND_TRUTH.lat).toBeCloseTo(51.752, 3);
@@ -40,11 +49,10 @@ describe('Bundled Reference Dataset and Audio Synthesis', () => {
   });
 
   it('generates synthetic bundled reference audio and encodes valid WAV bytes', () => {
-    const sampleRateHz = 2000;
-    const audio = generateBundledReferenceAudio(sampleRateHz);
+    
+    const audio = generateBundledReferenceAudio(SYNTHESIS_RATE_HZ);
 
-    // Audio duration is 1120s at 2000 Hz = 2,240,000 samples
-    expect(audio.length).toBe(1120 * sampleRateHz);
+    expect(audio.length).toBe(BUNDLED_DURATION_SEC * SYNTHESIS_RATE_HZ);
     expect(audio).toBeInstanceOf(Float32Array);
 
     // Verify non-zero content
@@ -57,7 +65,7 @@ describe('Bundled Reference Dataset and Audio Synthesis', () => {
     expect(nonZeroCount).toBeGreaterThan(0);
 
     // Verify WAV bytes generation and round-trip decoding
-    const wavBytes = generateBundledReferenceWavBytes(sampleRateHz);
+    const wavBytes = generateBundledReferenceWavBytes(SYNTHESIS_RATE_HZ);
     expect(wavBytes.length).toBeGreaterThan(44);
 
     // Check RIFF header
@@ -65,7 +73,7 @@ describe('Bundled Reference Dataset and Audio Synthesis', () => {
     expect(headerStr).toBe('RIFF');
 
     const decoded = decodeWavBytes(wavBytes);
-    expect(decoded.sampleRateHz).toBe(sampleRateHz);
+    expect(decoded.sampleRateHz).toBe(SYNTHESIS_RATE_HZ);
     expect(decoded.samples.length).toBe(audio.length);
-  });
+  }, SYNTHESIS_TEST_TIMEOUT_MS);
 });
