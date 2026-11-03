@@ -1,4 +1,14 @@
 /**
+ * Width of a Blackman window's transition band as a multiple of the sampling rate divided by the tap count: `transition = 5.5 * rate / taps`.
+ */
+const BLACKMAN_TRANSITION_FACTOR = 5.5;
+
+/**
+ * Share of the output sample rate kept as passband. The filter is flat to this fraction of the output rate and must be fully attenuated from the output rate less this fraction, the lowest frequency that folds back into the passband.
+ */
+const PASSBAND_FRACTION = 0.4;
+
+/**
  * Designs a normalized Blackman-windowed sinc low-pass FIR filter kernel.
  * @param cutoffHz - Low-pass cutoff frequency in Hz.
  * @param sampleRateHz - Input sample rate in Hz.
@@ -43,14 +53,19 @@ export function decimateAudioStream(
   inputRateHz: number,
   targetRateHz = 2000,
 ): { readonly samples: Float32Array; readonly sampleRateHz: number } {
+  if (!(inputRateHz > 0) || !(targetRateHz > 0)) {
+    throw new Error(`Sample rates must be positive, got input ${String(inputRateHz)} Hz and target ${String(targetRateHz)} Hz`);
+  }
   if (inputRateHz <= targetRateHz) {
     return { samples: new Float32Array(input), sampleRateHz: inputRateHz };
   }
 
   const ratio = Math.max(1, Math.round(inputRateHz / targetRateHz));
   const actualRateHz = inputRateHz / ratio;
-  const cutoffHz = 0.4 * actualRateHz;
-  const kernel = designLowPassFirKernel(cutoffHz, inputRateHz, Math.min(97, ratio * 4 + 1));
+  const cutoffHz = PASSBAND_FRACTION * actualRateHz;
+  // Content above `actualRate - cutoff` folds into the passband, so the transition band runs from the cutoff to there. A narrower filter lets propeller harmonics, wind and birdsong between the output Nyquist and that edge fold into the 65 to 500 Hz analysis band.
+  const transitionHz = actualRateHz - 2 * cutoffHz;
+  const kernel = designLowPassFirKernel(cutoffHz, inputRateHz, Math.ceil((BLACKMAN_TRANSITION_FACTOR * inputRateHz) / transitionHz));
   const halfKernel = (kernel.length - 1) >> 1;
 
   const outLength = Math.floor(input.length / ratio);
