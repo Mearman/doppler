@@ -28,6 +28,35 @@ import {
 /** Hypotheses kept after ranking, which bounds the work each further flyover costs. */
 const MAX_HYPOTHESES = 15;
 
+/** Milliseconds in a second, the divisor from `Date.now()` to epoch seconds. */
+const MS_PER_SEC = 1000;
+/** Radix of the random part of a session id: digits and lowercase letters. */
+const SESSION_ID_RADIX = 36;
+/** Characters `Math.random().toString(36)` places before the fraction digits (the leading `0.`), skipped when taking the random part. */
+const SESSION_ID_PREFIX_LENGTH = 2;
+/** Number of random characters in a session id. */
+const SESSION_ID_RANDOM_LENGTH = 6;
+/** Air temperature in degrees Celsius assumed for the speed of sound when the caller gives none; a design default for a mild day. */
+const DEFAULT_AMBIENT_TEMP_CELSIUS = 20;
+/** Noise floor in decibels reported for an episode before its first noise update, below any floor measured in practice so that it never reads as pollution. */
+const INITIAL_NOISE_FLOOR_DB = -80;
+/** Number of standard deviations of the measured speed uncertainty allowed between a measured Doppler speed and a segment's ground speed, when that exceeds the along-track wind allowance. */
+const SPEED_TOLERANCE_SIGMAS = 2.5;
+/** Largest difference in metres between a segment's closest-approach slant distance at a cell centre and the measured slant distance for the cell to seed a hypothesis. It trades missed seeds against refinement work, since each admitted seed costs a Gauss-Newton run. */
+const SEED_SLANT_GATE_METERS = 3500;
+/** Largest difference in seconds between the arrival-time gap a candidate segment implies and the measured gap on one clock for the segment to explain a further flyover. */
+const TIMING_GAP_GATE_SEC = 30;
+/** Largest difference in metres between a candidate segment's closest-approach slant distance at a hypothesis and the measured slant distance for the segment to explain a further flyover. */
+const MATCH_SLANT_GATE_METERS = 4000;
+
+/**
+ * Reads the system clock as whole seconds since the Unix epoch.
+ * @returns Epoch seconds, rounded down.
+ */
+function nowEpochSec(): number {
+  return Math.floor(Date.now() / MS_PER_SEC);
+}
+
 /**
  * Options for configuring or resuming a Doppler geolocation session.
  */
@@ -63,12 +92,12 @@ export class DopplerSessionEngine {
     if (options.initialSession !== undefined) {
       this.session = { ...options.initialSession };
     } else {
-      const now = Math.floor(Date.now() / 1000);
+      const now = nowEpochSec();
       this.session = {
-        id: `sess_${String(now)}_${Math.random().toString(36).slice(2, 8)}`,
+        id: `sess_${String(now)}_${Math.random().toString(SESSION_ID_RADIX).slice(SESSION_ID_PREFIX_LENGTH, SESSION_ID_PREFIX_LENGTH + SESSION_ID_RANDOM_LENGTH)}`,
         createdAtEpochSec: now,
         updatedAtEpochSec: now,
-        ambientTempCelsius: options.ambientTempCelsius ?? 20.0,
+        ambientTempCelsius: options.ambientTempCelsius ?? DEFAULT_AMBIENT_TEMP_CELSIUS,
         constraints: options.constraints ?? {},
         enfSignature: {
           detected: false,
@@ -103,7 +132,7 @@ export class DopplerSessionEngine {
     );
     this.session = {
       ...this.session,
-      updatedAtEpochSec: Math.floor(Date.now() / 1000),
+      updatedAtEpochSec: nowEpochSec(),
       constraints: { ...this.session.constraints, ...constraints },
       hypotheses: updatedHypotheses,
     };
@@ -121,14 +150,14 @@ export class DopplerSessionEngine {
       startedAtSec: startedAtEpochSec,
       endedAtSec: startedAtEpochSec,
       status: 'active',
-      currentNoiseFloorDb: -80,
+      currentNoiseFloorDb: INITIAL_NOISE_FLOOR_DB,
       noisePolluted: false,
       quietIntervals: [],
     };
 
     this.session = {
       ...this.session,
-      updatedAtEpochSec: Math.floor(Date.now() / 1000),
+      updatedAtEpochSec: nowEpochSec(),
       episodes: [...this.session.episodes, newEpisode],
     };
 
@@ -159,7 +188,7 @@ export class DopplerSessionEngine {
 
     this.session = {
       ...this.session,
-      updatedAtEpochSec: Math.floor(Date.now() / 1000),
+      updatedAtEpochSec: nowEpochSec(),
       episodes,
     };
   }
@@ -182,7 +211,7 @@ export class DopplerSessionEngine {
 
     this.session = {
       ...this.session,
-      updatedAtEpochSec: Math.floor(Date.now() / 1000),
+      updatedAtEpochSec: nowEpochSec(),
       episodes,
     };
   }
@@ -206,7 +235,7 @@ export class DopplerSessionEngine {
       });
       this.session = {
         ...this.session,
-        updatedAtEpochSec: Math.floor(Date.now() / 1000),
+        updatedAtEpochSec: nowEpochSec(),
         episodes,
       };
 
@@ -283,7 +312,7 @@ export class DopplerSessionEngine {
 
     this.session = {
       ...this.session,
-      updatedAtEpochSec: Math.floor(Date.now() / 1000),
+      updatedAtEpochSec: nowEpochSec(),
       observations: allObs,
       hypotheses: newHypotheses,
     };
@@ -308,7 +337,7 @@ export class DopplerSessionEngine {
    * Allowed speed difference between a measured Doppler speed and a segment's ground speed, which differ by the along-track wind.
    */
   private static speedTolerance(kinematics: Readonly<DopplerObservation['kinematics']>): number {
-    return Math.max(MAX_ALONG_TRACK_WIND_MPS, kinematics.speedStdMps * 2.5);
+    return Math.max(MAX_ALONG_TRACK_WIND_MPS, kinematics.speedStdMps * SPEED_TOLERANCE_SIGMAS);
   }
 
   /**
@@ -336,7 +365,7 @@ export class DopplerSessionEngine {
       const seed: GeoPoint3D = { lat: center.lat, lon: center.lon, altMeters: groundAlt };
 
       const cpa = computeSegmentCpa(seed, seg, soundSpeedMps);
-      if (Math.abs(cpa.cpaSlantMeters - obs.kinematics.inferredSlantMeters) > 3500) {
+      if (Math.abs(cpa.cpaSlantMeters - obs.kinematics.inferredSlantMeters) > SEED_SLANT_GATE_METERS) {
         continue;
       }
 
@@ -477,12 +506,12 @@ export class DopplerSessionEngine {
         if (timingReference !== null) {
           const expectedDeltaSec = newObs.cpaTimeSec - timingReference.firstObs.cpaTimeSec;
           const actualDeltaSec = cpa.cpaDelayedEpochSec - timingReference.firstCpa.cpaDelayedEpochSec;
-          if (Math.abs(actualDeltaSec - expectedDeltaSec) > 30) {
+          if (Math.abs(actualDeltaSec - expectedDeltaSec) > TIMING_GAP_GATE_SEC) {
             continue;
           }
         }
         const slantDiff = Math.abs(cpa.cpaSlantMeters - newObs.kinematics.inferredSlantMeters);
-        if (slantDiff < minSlantDiff && slantDiff < 4000) {
+        if (slantDiff < minSlantDiff && slantDiff < MATCH_SLANT_GATE_METERS) {
           minSlantDiff = slantDiff;
           bestSeg = seg;
         }

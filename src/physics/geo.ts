@@ -5,9 +5,9 @@ const WGS84_A = 6378137.0;
 /** WGS84 first eccentricity squared. */
 const WGS84_E2 = 6.69437999014e-3;
 /** Half a turn in degrees: the span from the prime meridian to the antimeridian, and the divisor of the degrees-to-radians factor (a half turn is pi radians). */
-const HALF_TURN_DEG = 180;
+export const HALF_TURN_DEG = 180;
 /** A full turn in degrees, the period of longitude. */
-const FULL_TURN_DEG = 2 * HALF_TURN_DEG;
+export const FULL_TURN_DEG = 2 * HALF_TURN_DEG;
 /** Latitude of either pole in degrees, the bound of the valid latitude range. */
 const POLE_LATITUDE_DEG = 90;
 /** Degrees to radians conversion factor. */
