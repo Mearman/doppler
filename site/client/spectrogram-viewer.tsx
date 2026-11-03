@@ -85,6 +85,25 @@ export function SpectrogramViewer({
   // Determine active view mode: live mic rolling waterfall vs clip spectrogram
   const isClipActive = clipSpectrogram !== null && !isListening;
 
+  // The container's size in CSS pixels, kept current so that a rotation, a window resize or the layout stacking redraws the canvas at its new size instead of stretching the old one.
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const container = containerRef.current;
+    if (container === null) {
+      return undefined;
+    }
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry !== undefined) {
+        setSize({ width: Math.floor(entry.contentRect.width), height: Math.floor(entry.contentRect.height) });
+      }
+    });
+    observer.observe(container);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -93,9 +112,7 @@ export function SpectrogramViewer({
     }
 
     const dpr = window.devicePixelRatio || 1;
-    const rect = container.getBoundingClientRect();
-    const width = Math.floor(rect.width);
-    const height = Math.floor(rect.height);
+    const { width, height } = size;
 
     if (width <= 0 || height <= 0) {
       return;
@@ -299,7 +316,7 @@ export function SpectrogramViewer({
     ctx.strokeStyle = '#282836';
     ctx.lineWidth = 1;
     ctx.strokeRect(LEFT_MARGIN, TOP_MARGIN, plotWidth, plotHeight);
-  }, [liveFrames, clipSpectrogram, observations, isListening, isClipActive, isExpanded]);
+  }, [liveFrames, clipSpectrogram, observations, isListening, isClipActive, isExpanded, size]);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>): void => {
     const canvas = canvasRef.current;
