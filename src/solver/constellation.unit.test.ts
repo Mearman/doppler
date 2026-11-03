@@ -1,16 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import { BUNDLED_CONSTELLATIONS, BUNDLED_SEGMENTS } from '../bundled';
-import { expandConstellationQueryKeys, formatConstellationKey, matchesSearchConstraints } from './constellation';
+import {
+  expandConstellationQueryKeys,
+  formatConstellationKey,
+  matchesSearchConstraints,
+  QUERY_BUCKET_SPAN,
+} from './constellation';
+
+/** Groundspeed in m/s of the bundled alpha segment, the first flyover of the key. */
+const ALPHA_SPEED_MPS = 66.8;
+/** Groundspeed in m/s of the bundled bravo segment, the second flyover of the key. */
+const BRAVO_SPEED_MPS = 77.9;
+/** Closest-approach time offset in seconds between the alpha and bravo flyovers: the 920 s between their start times. */
+const ALPHA_BRAVO_DELTA_SEC = 920;
+/** Axes of a constellation key (first speed, second speed, time offset), each expanded by a query. */
+const KEY_AXES = 3;
+/** Buckets per axis of an expanded query: the measured one and `QUERY_BUCKET_SPAN` either side. */
+const BUCKETS_PER_AXIS = 2 * QUERY_BUCKET_SPAN + 1;
 
 describe('Constellation Hashing and Multi-Axis Filtering', () => {
   it('formats deterministic constellation keys and expands query neighborhood', () => {
-    const key = formatConstellationKey(66.8, 77.9, 920);
+    const key = formatConstellationKey(ALPHA_SPEED_MPS, BRAVO_SPEED_MPS, ALPHA_BRAVO_DELTA_SEC);
     expect(key).toBe('v22_v26_dt184');
 
-    const expanded = expandConstellationQueryKeys(66.8, 77.9, 920);
+    const expanded = expandConstellationQueryKeys(ALPHA_SPEED_MPS, BRAVO_SPEED_MPS, ALPHA_BRAVO_DELTA_SEC);
     expect(expanded.has(key)).toBe(true);
-    // 5 x 5 x 5 neighborhood
-    expect(expanded.size).toBe(125);
+    // One key per combination of buckets on every axis
+    expect(expanded.size).toBe(BUCKETS_PER_AXIS ** KEY_AXES);
   });
 
   it('filters candidates correctly against multi-axis space, date, and hour constraints', () => {

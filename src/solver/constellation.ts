@@ -16,7 +16,7 @@ const SPEED_BUCKET_MPS = 3;
 /** Width in seconds of a closest-approach time-offset bucket in a constellation key. A design choice with the same trade-off as the speed bucket. */
 const DELTA_BUCKET_SEC = 5;
 /** Number of buckets each side of the measured one that a query expands to on each key axis, so a measurement near a bucket boundary still finds its pair. */
-const QUERY_BUCKET_SPAN = 2;
+export const QUERY_BUCKET_SPAN = 2;
 /** Largest closest-approach slant distance in metres at which a segment is paired within a cell: the acoustic range of an aircraft. */
 const MAX_PAIR_SLANT_METERS = 10000;
 /** Shortest closest-approach time offset in seconds between two flyovers that forms a pair. */
