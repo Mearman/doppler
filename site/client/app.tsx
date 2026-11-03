@@ -11,6 +11,7 @@ import { BUNDLED_GROUND_TRUTH, generateBundledReferenceAudio } from '../../src/b
 import { ellipseOutline } from '../../src/physics/geo';
 import type { ComputedSingleFrame } from '../../src/dsp/spectrogram';
 import { type LocationHypothesis, type LocationSession, LocationSessionSchema } from '../../src/schemas';
+import { WorkerReplySchema } from './worker-protocol';
 import * as styles from '../styles.css';
 import { useOfflineStatus, type OfflineStatus } from './offline-status';
 import { SpectrogramViewer, type ClipSpectrogramData } from './spectrogram-viewer';
@@ -43,6 +44,9 @@ function describeOffline(status: Readonly<OfflineStatus>): OfflineBadge {
     ? { label: 'Offline ready', color: 'green' }
     : { label: 'Offline: stored map tiles only', color: 'orange' };
 }
+
+/** Median noise floor threshold in dB above which audio is flagged as noise polluted. */
+const NOISE_POLLUTED_THRESHOLD_DB = -65;
 
 export function App(): React.JSX.Element {
   const [session, setSession] = useState<LocationSession | null>(null);
@@ -117,35 +121,32 @@ export function App(): React.JSX.Element {
     const worker = new Worker(new URL('./solver-worker.js', import.meta.url), { type: 'module' });
     workerRef.current = worker;
 
-    worker.onmessage = (event: MessageEvent<{ id: string; success: boolean; data?: unknown; error?: string }>) => {
-      const res = event.data;
+    worker.onmessage = (event: MessageEvent<unknown>) => {
+      const parsed = WorkerReplySchema.safeParse(event.data);
+      if (!parsed.success) {
+        return;
+      }
+      const res = parsed.data;
       setAnalysisId((current) => (current === res.id ? null : current));
       if (!res.success) {
-        setErrorMessage(`Analysis failed: ${res.error ?? 'unknown error'}`);
+        setErrorMessage(`Analysis failed: ${res.error}`);
 
         return;
       }
       setErrorMessage(null);
-      const data = res.data as {
-        session?: LocationSession;
-        observations?: unknown[];
-        spectrogram?: ClipSpectrogramData;
-        spectrogramSummary?: { medianNoiseDb: number };
-      };
-      if (data.spectrogram !== undefined) {
-        setClipSpectrogram(data.spectrogram);
-      }
-      if (data.session !== undefined) {
-        setSession(data.session);
-        if (data.observations !== undefined) {
-          setActiveFlyoverCount(data.observations.length);
+      if (res.type === 'session') {
+        setSession(res.data);
+        if (res.data.hypotheses.length > 0) {
+          setStatusMessage(`Identified observer location with ${String(res.data.hypotheses.length)} candidate(s).`);
         }
-        if (data.spectrogramSummary !== undefined) {
-          setNoiseFloorDb(data.spectrogramSummary.medianNoiseDb);
-          setIsNoisePolluted(data.spectrogramSummary.medianNoiseDb > -65);
-        }
-        if (data.session.hypotheses.length > 0) {
-          setStatusMessage(`Identified observer location with ${String(data.session.hypotheses.length)} candidate(s).`);
+      } else if (res.type === 'audio_analysed') {
+        setClipSpectrogram(res.data.spectrogram);
+        setSession(res.data.session);
+        setActiveFlyoverCount(res.data.observations.length);
+        setNoiseFloorDb(res.data.spectrogramSummary.medianNoiseDb);
+        setIsNoisePolluted(res.data.spectrogramSummary.medianNoiseDb > NOISE_POLLUTED_THRESHOLD_DB);
+        if (res.data.session.hypotheses.length > 0) {
+          setStatusMessage(`Identified observer location with ${String(res.data.session.hypotheses.length)} candidate(s).`);
         }
       }
     };
