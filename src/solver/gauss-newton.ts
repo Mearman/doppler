@@ -1,4 +1,7 @@
+import { DEFAULT_SOUND_SPEED_MPS } from '../physics/atmosphere';
 import {
+  FULL_TURN_DEG,
+  HALF_TURN_DEG,
   interpolateTerrainElevationMeters,
   localEnuToGeo,
 } from '../physics/geo';
@@ -28,6 +31,101 @@ const ADMISSION_SIGMAS = 3;
 const WIND_SIGMA_MPS = 5;
 
 /**
+ * Standard deviation, in seconds, of the modelled-minus-observed difference between the closest-approach times of two flyovers in one episode. A design choice: it sets how strongly timing weighs against slant, speed and frequency evidence.
+ */
+const CPA_OFFSET_SIGMA_SEC = 0.8;
+
+/**
+ * Standard deviation, in Hz, of a ridge-point frequency residual. A design choice: it sets how strongly the ridge shape weighs against slant, speed and timing evidence.
+ */
+const RIDGE_FREQ_SIGMA_HZ = 0.35;
+
+/**
+ * Largest per-flyover fundamental-frequency trim, in Hz, that the residual evaluation absorbs before scoring the ridge. It allows a small engine speed (RPM) trim per aircraft, and its bound stops a wrong trajectory from being fitted by shifting its whole ridge.
+ */
+const MAX_F0_TRIM_HZ = 2.5;
+
+/**
+ * Standard deviation, in metres, of the weak isotropic prior added to the Fisher information so that a single-flyover ribbon, which constrains one direction only, stays invertible.
+ */
+const PRIOR_SIGMA_METERS = 2500;
+
+/**
+ * Smallest Fisher eigenvalue, in 1/m^2, the confidence ellipse accepts, so that a degenerate matrix cannot divide by zero.
+ */
+const MIN_FISHER_EIGENVALUE = 1e-9;
+
+/**
+ * Chi-square quantile with two degrees of freedom at probability 0.95 (`-2 * ln(0.05)`, rounded to five decimals): the squared radius of the 95% confidence ellipse in standard deviations.
+ */
+const CHI_SQUARE_2DOF_95 = 5.99146;
+
+/**
+ * Largest semi-axis in metres that a confidence ellipse reports; a larger uncertainty is reported as this bound.
+ */
+const MAX_ELLIPSE_SEMI_AXIS_METERS = 15000;
+
+/**
+ * Smallest semi-major axis in metres that a confidence ellipse reports, so a very sharp fit is not reported as an exact position.
+ */
+const MIN_ELLIPSE_SEMI_MAJOR_METERS = 2;
+
+/**
+ * Smallest semi-minor axis in metres that a confidence ellipse reports, so a very sharp fit is not reported as an exact position.
+ */
+const MIN_ELLIPSE_SEMI_MINOR_METERS = 1.5;
+
+/**
+ * Angle in degrees between the East axis (where the mathematical angle starts) and North (where the compass bearing starts), so that `bearing = NORTH_FROM_EAST_DEG - angle`.
+ */
+const NORTH_FROM_EAST_DEG = 90;
+
+/**
+ * Number of Levenberg-Marquardt iterations. Each iteration costs three residual evaluations over every pair, so it bounds the work spent on one candidate; a design choice that trades convergence for work.
+ */
+const MAX_REFINEMENT_ITERATIONS = 8;
+
+/**
+ * Initial Levenberg-Marquardt damping, as a fraction of the diagonal of the normal equations. A small value starts close to a pure Gauss-Newton step.
+ */
+const INITIAL_DAMPING = 1e-2;
+
+/**
+ * Factor by which damping shrinks after an accepted step, moving towards a pure Gauss-Newton step.
+ */
+const DAMPING_DECREASE_FACTOR = 0.3;
+
+/**
+ * Factor by which damping grows after a rejected step, moving towards a short gradient-descent step.
+ */
+const DAMPING_INCREASE_FACTOR = 4;
+
+/**
+ * Finite-difference step in metres used for the numerical Jacobian: a design choice that trades truncation error (too large a step) against floating-point noise in the residual differences (too small).
+ */
+const FINITE_DIFFERENCE_STEP_METERS = 2;
+
+/**
+ * Floor on a diagonal entry of the normal equations, in the units of the Jacobian squared, so that an unconstrained direction still receives damping.
+ */
+const MIN_NORMAL_DIAGONAL = 1e-4;
+
+/**
+ * Determinant magnitude below which the damped normal equations are treated as singular and the refinement stops.
+ */
+const SINGULAR_DETERMINANT = 1e-12;
+
+/**
+ * Longest single refinement step in metres, which keeps a poorly conditioned step from leaving the neighbourhood where the linearisation holds.
+ */
+const MAX_STEP_METERS = 1500;
+
+/**
+ * Accepted step length in metres below which the refinement has converged.
+ */
+const CONVERGED_STEP_METERS = 0.25;
+
+/**
  * Largest speed difference, in m/s, that a segment may have from a measured Doppler speed and still be a candidate: the admission gate applied to the wind spread.
  */
 export const MAX_ALONG_TRACK_WIND_MPS = ADMISSION_SIGMAS * WIND_SIGMA_MPS;
@@ -38,7 +136,7 @@ export const MAX_ALONG_TRACK_WIND_MPS = ADMISSION_SIGMAS * WIND_SIGMA_MPS;
  * @returns A non-negative amount to subtract from the hypothesis's log-posterior.
  */
 export function unmatchedObservationLogPenalty(observation: Readonly<DopplerObservation>): number {
-  return 0.5 * (2 + observation.ridgePoints.length) * OUTLIER_SIGMAS ** 2;
+  return ((2 + observation.ridgePoints.length) * OUTLIER_SIGMAS ** 2) / 2;
 }
 
 /**
@@ -136,7 +234,7 @@ function evaluateResidualsAtEnuOffset(
       const modeledOffsetSec = cpa.cpaDelayedEpochSec - firstCpa.cpaDelayedEpochSec;
       const observedOffsetSec = observation.cpaTimeSec - reference.observation.cpaTimeSec;
       const timeDiff = modeledOffsetSec - observedOffsetSec;
-      residuals.push(timeDiff / 0.8);
+      residuals.push(timeDiff / CPA_OFFSET_SIGMA_SEC);
     }
 
     // 3. Full retarded-time Doppler ridge frequency residuals centered at each event's own delayed CPA
@@ -160,8 +258,7 @@ function evaluateResidualsAtEnuOffset(
       }
     }
     meanFreqOffset = nPts > 0 ? meanFreqOffset / nPts : 0;
-    // Clamp allowed RPM trim to ±2.5 Hz so bad trajectories cannot overfit
-    const clampedF0Trim = Math.max(-2.5, Math.min(2.5, meanFreqOffset));
+    const clampedF0Trim = Math.max(-MAX_F0_TRIM_HZ, Math.min(MAX_F0_TRIM_HZ, meanFreqOffset));
 
     for (let k = 0; k < nPts; k += 1) {
       const obsPt = observation.ridgePoints[k];
@@ -170,7 +267,7 @@ function evaluateResidualsAtEnuOffset(
         const freqErr = obsPt.freqHz - (modPt.observedFreqHz + clampedF0Trim);
         freqSqSum += freqErr * freqErr;
         freqCount += 1;
-        residuals.push(freqErr / 0.35);
+        residuals.push(freqErr / RIDGE_FREQ_SIGMA_HZ);
       }
     }
   }
@@ -197,10 +294,9 @@ export function fisherToConfidenceEllipse95(
   readonly ellipseSemiMinorMeters: number;
   readonly ellipseBearingDeg: number;
 } {
-  // Add weak prior regularization (1 / (3000m)^2) so single-flyover ribbons remain numerically invertible
-  const priorReg = 1 / (2500 * 2500);
+  const priorReg = 1 / (PRIOR_SIGMA_METERS * PRIOR_SIGMA_METERS);
   const ixx = fisher[0] + priorReg;
-  const ixy = 0.5 * (fisher[1] + fisher[2]);
+  const ixy = (fisher[1] + fisher[2]) / 2;
   const iyy = fisher[3] + priorReg;
 
   const trace = ixx + iyy;
@@ -208,16 +304,22 @@ export function fisherToConfidenceEllipse95(
   const disc = Math.hypot(diff, 2 * ixy);
 
   // Eigenvalues of Fisher Information matrix (larger eigenvalue = tighter precision = smaller axis)
-  const lambdaMax = Math.max(1e-9, 0.5 * (trace + disc));
-  const lambdaMin = Math.max(1e-9, 0.5 * (trace - disc));
+  const lambdaMax = Math.max(MIN_FISHER_EIGENVALUE, (trace + disc) / 2);
+  const lambdaMin = Math.max(MIN_FISHER_EIGENVALUE, (trace - disc) / 2);
 
-  const chi2Scale = Math.sqrt(5.99146);
-  const ellipseSemiMajorMeters = Math.min(15000, Math.max(2.0, chi2Scale / Math.sqrt(lambdaMin)));
-  const ellipseSemiMinorMeters = Math.min(15000, Math.max(1.5, chi2Scale / Math.sqrt(lambdaMax)));
+  const chi2Scale = Math.sqrt(CHI_SQUARE_2DOF_95);
+  const ellipseSemiMajorMeters = Math.min(
+    MAX_ELLIPSE_SEMI_AXIS_METERS,
+    Math.max(MIN_ELLIPSE_SEMI_MAJOR_METERS, chi2Scale / Math.sqrt(lambdaMin)),
+  );
+  const ellipseSemiMinorMeters = Math.min(
+    MAX_ELLIPSE_SEMI_AXIS_METERS,
+    Math.max(MIN_ELLIPSE_SEMI_MINOR_METERS, chi2Scale / Math.sqrt(lambdaMax)),
+  );
 
   // Angle of minimum-information eigenvector (major axis of uncertainty) in East-North plane
-  const angleRad = 0.5 * Math.atan2(2 * ixy, ixx - iyy) + 0.5 * Math.PI;
-  const bearingDeg = ((90 - (angleRad * 180) / Math.PI) % 360 + 360) % 360;
+  const angleRad = Math.atan2(2 * ixy, ixx - iyy) / 2 + Math.PI / 2;
+  const bearingDeg = (((NORTH_FROM_EAST_DEG - (angleRad * HALF_TURN_DEG) / Math.PI) % FULL_TURN_DEG) + FULL_TURN_DEG) % FULL_TURN_DEG;
 
   return {
     ellipseSemiMajorMeters,
@@ -246,12 +348,11 @@ export function refineObserverCoordinateGaussNewton(
   pairs: readonly ObservationSegmentPair[],
   options: Readonly<RefineCoordinateOptions> = {},
 ): RefinedLocationResult {
-  const { demGrid = [], soundSpeedMps = 343.0 } = options;
+  const { demGrid = [], soundSpeedMps = DEFAULT_SOUND_SPEED_MPS } = options;
   const context = { demGrid, soundSpeedMps };
   let eastMeters = 0;
   let northMeters = 0;
-  let damping = 1e-2;
-  const fdStepMeters = 2.0;
+  let damping = INITIAL_DAMPING;
 
   let currentEval = evaluateResidualsAtEnuOffset(seedGeo, { eastMeters, northMeters }, pairs, context);
   let currentCost = currentEval.residuals.reduce((acc, r) => acc + r * r, 0);
@@ -260,16 +361,16 @@ export function refineObserverCoordinateGaussNewton(
   let jtj01 = 0;
   let jtj11 = 0;
 
-  for (let iter = 0; iter < 8; iter += 1) {
+  for (let iter = 0; iter < MAX_REFINEMENT_ITERATIONS; iter += 1) {
     const evalPlusE = evaluateResidualsAtEnuOffset(
       seedGeo,
-      { eastMeters: eastMeters + fdStepMeters, northMeters },
+      { eastMeters: eastMeters + FINITE_DIFFERENCE_STEP_METERS, northMeters },
       pairs,
       context,
     );
     const evalPlusN = evaluateResidualsAtEnuOffset(
       seedGeo,
-      { eastMeters, northMeters: northMeters + fdStepMeters },
+      { eastMeters, northMeters: northMeters + FINITE_DIFFERENCE_STEP_METERS },
       pairs,
       context,
     );
@@ -286,8 +387,8 @@ export function refineObserverCoordinateGaussNewton(
       const rE = evalPlusE.residuals[k] ?? r0;
       const rN = evalPlusN.residuals[k] ?? r0;
 
-      const jE = (rE - r0) / fdStepMeters;
-      const jN = (rN - r0) / fdStepMeters;
+      const jE = (rE - r0) / FINITE_DIFFERENCE_STEP_METERS;
+      const jN = (rN - r0) / FINITE_DIFFERENCE_STEP_METERS;
 
       jtj00 += jE * jE;
       jtj01 += jE * jN;
@@ -296,19 +397,18 @@ export function refineObserverCoordinateGaussNewton(
       jtr1 += jN * r0;
     }
 
-    const a00 = jtj00 + damping * Math.max(1e-4, jtj00);
-    const a11 = jtj11 + damping * Math.max(1e-4, jtj11);
+    const a00 = jtj00 + damping * Math.max(MIN_NORMAL_DIAGONAL, jtj00);
+    const a11 = jtj11 + damping * Math.max(MIN_NORMAL_DIAGONAL, jtj11);
     const det = a00 * a11 - jtj01 * jtj01;
-    if (Math.abs(det) < 1e-12) {
+    if (Math.abs(det) < SINGULAR_DETERMINANT) {
       break;
     }
 
     const rawStepE = -(a11 * jtr0 - jtj01 * jtr1) / det;
     const rawStepN = -(-jtj01 * jtr0 + a00 * jtr1) / det;
 
-    // Limit single iteration step to 1,500 meters for stability
     const stepNorm = Math.hypot(rawStepE, rawStepN);
-    const scale = stepNorm > 1500 ? 1500 / stepNorm : 1;
+    const scale = stepNorm > MAX_STEP_METERS ? MAX_STEP_METERS / stepNorm : 1;
     const stepE = rawStepE * scale;
     const stepN = rawStepN * scale;
 
@@ -325,19 +425,19 @@ export function refineObserverCoordinateGaussNewton(
       northMeters += stepN;
       currentEval = candidateEval;
       currentCost = candidateCost;
-      damping *= 0.3;
-      if (Math.hypot(stepE, stepN) < 0.25) {
+      damping *= DAMPING_DECREASE_FACTOR;
+      if (Math.hypot(stepE, stepN) < CONVERGED_STEP_METERS) {
         break;
       }
     } else {
-      damping *= 4.0;
+      damping *= DAMPING_INCREASE_FACTOR;
     }
   }
 
   const fisherInfo: readonly [number, number, number, number] = [jtj00, jtj01, jtj01, jtj11];
   const ellipse = fisherToConfidenceEllipse95(fisherInfo);
   // The optimiser minimises plain squares, but the score caps each residual at the outlier gate so that a poor fit never costs more than leaving the flyover unexplained (`unmatchedObservationLogPenalty`).
-  const logLikelihood = -0.5 * currentEval.residuals.reduce((acc, r) => acc + Math.min(r * r, OUTLIER_SIGMAS ** 2), 0);
+  const logLikelihood = -(currentEval.residuals.reduce((acc, r) => acc + Math.min(r * r, OUTLIER_SIGMAS ** 2), 0) / 2);
 
   return {
     lat: currentEval.point.lat,
