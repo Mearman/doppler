@@ -176,6 +176,21 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
       expect(loose.length).toBeLessThan(tight.length);
     });
 
+    it('drops fast segments of unclassified types, which are mostly airliners, and keeps classified ones', () => {
+      const FAST_MPS_PER_DEG = 111000;
+      // 0.0014 degrees of latitude every 10 s is about 15 m/s; 0.0128 is about 142 m/s.
+      const fastLeg = (step: number): RawAdsbTraceFile['trace'] => Array.from({ length: 12 }, (_, index) => [index * 10, 51.7 + index * step, -1.3, 3000, 0, 0]);
+      const speedMps = (0.0128 * FAST_MPS_PER_DEG) / 10;
+      const unclassified = processRawAdsbTrace({ icao: 'ae0001', t: 'A20N', trace: fastLeg(0.0128) }, '2026-09-08', base);
+      const piston = processRawAdsbTrace({ icao: 'ae0002', t: 'C172', trace: fastLeg(0.0128) }, '2026-09-08', base);
+      const slowUnclassified = processRawAdsbTrace({ icao: 'ae0003', t: 'ZZZZ', trace: fastLeg(0.0014) }, '2026-09-08', base);
+
+      expect(speedMps).toBeGreaterThan(100);
+      expect(unclassified).toEqual([]);
+      expect(piston.length).toBeGreaterThan(0);
+      expect(slowUnclassified.length).toBeGreaterThan(0);
+    });
+
     it('gives every segment of one flight a distinct id', () => {
       const trace: RawAdsbTraceFile = { icao: '4009a1', t: 'C172', trace: [...leg(0), ...leg(400)] };
       const ids = processRawAdsbTrace(trace, '2026-09-08', base).map((segment) => segment.id);
@@ -216,6 +231,22 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
 
       expect(readAdsbSegments(ready)).toHaveLength(BUNDLED_SEGMENTS.length);
       expect(() => readAdsbSegments(bad)).toThrow('bad.json');
+    });
+  });
+
+  describe('saveDatasetBundle batching', () => {
+    it('round-trips more segments than one write batch holds', () => {
+      const template = BUNDLED_SEGMENTS[0]!;
+      // More than one batch of 5000, so the batch boundary is crossed twice.
+      const segments = Array.from({ length: 12001 }, (_, index) => ({ ...template, id: `batch_${String(index)}`, flightId: `F${String(index)}` }));
+      const filePath = join(tempDir, 'batched.json');
+
+      saveDatasetBundle(filePath, segments.slice(0, 12001), []);
+      const loaded = loadDatasetFile(filePath);
+
+      expect(loaded.segments).toHaveLength(segments.length);
+      expect(loaded.segments[5000]?.id).toBe('batch_5000');
+      expect(loaded.segments[12000]?.id).toBe('batch_12000');
     });
   });
 
