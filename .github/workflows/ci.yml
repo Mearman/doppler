@@ -5,10 +5,15 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
+# A push to main must not cancel a release that an earlier push started: half a release leaves a tag without a publish, or a publish without its changelog commit.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
 
 jobs:
   validate:
@@ -49,3 +54,42 @@ jobs:
 
       - name: Run E2E PWA Browser Tests
         run: pnpm run test:e2e
+
+  release:
+    name: Release
+    needs: validate
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    # npm trusted publishing only works from GitHub-hosted runners, so the OIDC token exchange cannot happen elsewhere.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # to push the release tag and create the GitHub Release
+      issues: write # to comment on released issues
+      pull-requests: write # to comment on released pull requests
+      id-token: write # OIDC identity for npm trusted publishing and provenance (no NPM_TOKEN)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # semantic-release analyses the full commit history since the last release.
+          fetch-depth: 0
+          # Credentials are not persisted: semantic-release pushes with the GITHUB_TOKEN it is given below, and the main branch has no ruleset that token would need to bypass.
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          # registry-url is deliberately absent: setup-node would otherwise write an .npmrc _authToken line that wins over the OIDC token exchange, breaking trusted publishing.
+      - run: pnpm install --frozen-lockfile
+      # The package publishes dist and dist-cli, so both are built before semantic-release publishes.
+      - run: pnpm run build
+      # Trusted publishing needs npm CLI 11.5.1 or later; the exact version is raised deliberately.
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@11.20.0
+      - name: Release
+        run: pnpm exec semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Blanked, not omitted: an inherited NPM_TOKEN or NODE_AUTH_TOKEN would otherwise be used in preference to the OIDC exchange.
+          NPM_TOKEN: ''
+          NODE_AUTH_TOKEN: ''
