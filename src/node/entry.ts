@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from 'node:fs';
-import { decodeWavBytes, encodeWavPcm16 } from '../dsp/side-channels';
+import { decodeWavBytes, encodeWavPcm16 } from '../dsp/wav';
 
 export * from '../index';
 export * from './stream-adsb';

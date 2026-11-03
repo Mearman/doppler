@@ -14,6 +14,7 @@ export * from './dsp/spectrogram';
 export * from './dsp/ridge-tracker';
 export * from './dsp/dechirp';
 export * from './dsp/side-channels';
+export * from './dsp/wav';
 export * from './solver/constellation';
 export * from './solver/gauss-newton';
 export * from './solver/session';

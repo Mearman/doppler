@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { generateBundledReferenceAudio } from '../../src/bundled';
-import { encodeWavPcm16 } from '../../src/dsp/side-channels';
+import { encodeWavPcm16 } from '../../src/dsp/wav';
 
 test.describe('Doppler PWA Offline Geolocation', () => {
   test('renders header, tabs, and Leaflet map', async ({ page }) => {
