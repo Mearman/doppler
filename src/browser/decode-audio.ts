@@ -4,13 +4,19 @@ import { decodeWavBytes } from '../dsp/wav';
 /** Rate the browser decodes compressed audio at. Analysis decimates to a far lower rate, so the exact value only has to cover the aircraft band. */
 const COMPRESSED_DECODE_RATE_HZ = 44100;
 
+/** Bytes of a RIFF four-character code, such as `RIFF` or `WAVE`. */
+const FOUR_CC_BYTES = 4;
+
+/** Bytes of the RIFF chunk size field. */
+const RIFF_SIZE_FIELD_BYTES = 4;
+
 /** Bytes of the RIFF header's tag plus size field that precede the WAVE form type. */
-const RIFF_FORM_OFFSET = 8;
+const RIFF_FORM_OFFSET = FOUR_CC_BYTES + RIFF_SIZE_FIELD_BYTES;
 
 function isWav(bytes: Readonly<Uint8Array>): boolean {
-  const tag = (offset: number): string => String.fromCharCode(...bytes.subarray(offset, offset + 4));
+  const tag = (offset: number): string => String.fromCharCode(...bytes.subarray(offset, offset + FOUR_CC_BYTES));
 
-  return bytes.length >= RIFF_FORM_OFFSET + 4 && tag(0) === 'RIFF' && tag(RIFF_FORM_OFFSET) === 'WAVE';
+  return bytes.length >= RIFF_FORM_OFFSET + FOUR_CC_BYTES && tag(0) === 'RIFF' && tag(RIFF_FORM_OFFSET) === 'WAVE';
 }
 
 /**

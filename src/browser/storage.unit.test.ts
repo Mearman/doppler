@@ -13,6 +13,9 @@ import {
   saveSessionToStorage,
 } from './storage';
 
+/** Epoch seconds of 2023-11-14T22:13:20Z, an arbitrary fixed episode start. */
+const EPISODE_START_EPOCH_SEC = 1700000000;
+
 describe('Browser Storage and Session Serialization', () => {
   let memoryStore: Record<string, string> = {};
 
@@ -48,7 +51,7 @@ describe('Browser Storage and Session Serialization', () => {
       dataset: BUNDLED_DATASET,
       ambientTempCelsius: 20.0,
     });
-    engine.startEpisode(1700000000);
+    engine.startEpisode(EPISODE_START_EPOCH_SEC);
 
     return engine.getSession();
   };
@@ -102,5 +105,17 @@ describe('Browser Storage and Session Serialization', () => {
     const imported = importSessionJson(jsonStr);
     expect(imported.id).toBe(mockSession.id);
     expect(imported.episodes[0]?.status).toBe('active');
+  });
+
+  it('treats stored values that are not valid sessions or datasets as absent', () => {
+    localStorage.setItem('doppler_sessions_v1', JSON.stringify([{ id: 'not-a-session' }]));
+    localStorage.setItem('doppler_custom_dataset_v1', JSON.stringify({ version: '1.0.0' }));
+
+    expect(loadSessionsFromStorage()).toEqual([]);
+    expect(loadCustomDataset()).toBeNull();
+  });
+
+  it('rejects an imported session that does not match the schema', () => {
+    expect(() => importSessionJson(JSON.stringify({ id: 'not-a-session' }))).toThrow();
   });
 });

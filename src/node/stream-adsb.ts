@@ -7,6 +7,7 @@ import type { AdsbPing, AircraftCategory, GeoPoint3D } from '../schemas';
 import { type DopplerDataset, DopplerDatasetSchema, type LinearFlightSegment, LinearFlightSegmentSchema } from '../schemas';
 import { buildConstellationIndex } from '../solver/constellation';
 import { SLANT_SIGMA_FLOOR_METERS } from '../solver/gauss-newton';
+import { MS_PER_SECOND } from '../time';
 
 /**
  * One trace sample as `adsb.lol` and `tar1090` write it: seconds since the trace's `timestamp`, latitude, longitude and barometric altitude in feet, which is the string `ground` on the ground and null when unreported. Later fields (ground speed, track, flags) are ignored.
@@ -52,9 +53,6 @@ const MAX_AUDIBLE_ALTITUDE_METERS = 6096;
  * Ground speed, in m/s (about 195 knots), above which a segment of an aircraft whose type is not classified is dropped. Light propeller aircraft and helicopters seldom exceed it (about 2 percent of their segments in a sample of real traces), whereas most unclassified types are airliners that fly faster than this below 20,000 ft (about 56 percent of theirs) and have no narrowband propeller tone to match.
  */
 const MAX_UNCLASSIFIED_SPEED_MPS = 100;
-
-/** Milliseconds in a second, for converting between epoch seconds and `Date`. */
-const MS_PER_SECOND = 1000;
 
 /** Characters of the ISO 8601 calendar date (`YYYY-MM-DD`) at the start of a `Date.toISOString()` string. */
 const ISO_DATE_LENGTH = 'YYYY-MM-DD'.length;

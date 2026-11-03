@@ -2,7 +2,7 @@ import { defineConfig } from 'tsdown';
 
 export default defineConfig([
   {
-    entry: ['src/index.ts', 'src/node/entry.ts', 'src/browser/entry.ts'],
+    entry: ['src/index.ts', 'src/node/entry.ts', 'src/browser/entry.ts', 'src/browser/mic-capture.worklet.ts'],
     root: 'src',
     format: ['esm'],
     dts: true,

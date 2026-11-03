@@ -1,4 +1,5 @@
-import type { DopplerDataset, LocationSession } from '../schemas';
+import { z } from 'zod';
+import { DopplerDataset, LocationSession } from '../schemas';
 
 const SESSIONS_KEY = 'doppler_sessions_v1';
 const DATASET_KEY = 'doppler_custom_dataset_v1';
@@ -19,7 +20,7 @@ export function saveSessionToStorage(session: Readonly<LocationSession>): void {
 
 /**
  * Loads all saved sessions from browser storage.
- * @returns Array of LocationSessions.
+ * @returns The stored sessions, or an empty array when nothing is stored or the stored value is not a list of valid sessions.
  */
 export function loadSessionsFromStorage(): LocationSession[] {
   try {
@@ -29,7 +30,7 @@ export function loadSessionsFromStorage(): LocationSession[] {
     }
     const parsed: unknown = JSON.parse(raw);
 
-    return Array.isArray(parsed) ? (parsed as LocationSession[]) : [];
+    return z.array(LocationSession).parse(parsed);
   } catch {
     return [];
   }
@@ -71,7 +72,7 @@ export function saveCustomDataset(dataset: Readonly<DopplerDataset>): void {
 
 /**
  * Loads any custom saved dataset from browser storage.
- * @returns The saved DopplerDataset or null.
+ * @returns The saved DopplerDataset, or null when nothing is stored or the stored value is not a valid dataset.
  */
 export function loadCustomDataset(): DopplerDataset | null {
   try {
@@ -81,7 +82,7 @@ export function loadCustomDataset(): DopplerDataset | null {
     }
     const parsed: unknown = JSON.parse(raw);
 
-    return parsed as DopplerDataset;
+    return DopplerDataset.parse(parsed);
   } catch {
     return null;
   }
@@ -100,9 +101,10 @@ export function exportSessionJson(session: Readonly<LocationSession>): string {
  * Parses and validates an imported session JSON string.
  * @param jsonText - Raw imported JSON text.
  * @returns Parsed `LocationSession`.
+ * @throws When the text is not JSON or not a valid session.
  */
 export function importSessionJson(jsonText: string): LocationSession {
   const parsed: unknown = JSON.parse(jsonText);
 
-  return parsed as LocationSession;
+  return LocationSession.parse(parsed);
 }
