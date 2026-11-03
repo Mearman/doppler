@@ -2,17 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { BUNDLED_DEM_GRID, BUNDLED_SEGMENTS } from '../bundled';
+import { SYNTHETIC_DEM_GRID, SYNTHETIC_SEGMENTS } from '../test-support/synthetic-reference';
 import { DopplerDatasetSchema } from '../schemas';
 import { flightLeg, LEG_ALTITUDE_FT, LEG_STEP_DEGREES, type Origin, ping } from './test-support/trace';
-import {
-  classifyAircraftCategory,
-  loadDatasetFile,
-  processRawAdsbTrace,
-  readAdsbSegments,
-  type RawAdsbTraceFile,
-  saveDatasetBundle,
-} from './stream-adsb';
+import { classifyAircraftCategory, processRawAdsbTrace, type RawAdsbTraceFile } from '../adsb-traces';
+import { loadDatasetFile, readAdsbSegments, saveDatasetBundle } from './stream-adsb';
 
 /** Epoch seconds of 2026-09-08T00:00:00Z, the date that traces carrying their own `timestamp` are given. */
 const DAY_START_EPOCH_SEC = 1788825600;
@@ -295,11 +289,11 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
 
     it('passes ready-made segments through and names a file that matches no shape', () => {
       const ready = join(tempDir, 'ready.json');
-      writeFileSync(ready, JSON.stringify({ segments: BUNDLED_SEGMENTS }));
+      writeFileSync(ready, JSON.stringify({ segments: SYNTHETIC_SEGMENTS }));
       const bad = join(tempDir, 'bad.json');
       writeFileSync(bad, JSON.stringify({ hello: 'world' }));
 
-      expect(readAdsbSegments(ready)).toHaveLength(BUNDLED_SEGMENTS.length);
+      expect(readAdsbSegments(ready)).toHaveLength(SYNTHETIC_SEGMENTS.length);
       expect(() => readAdsbSegments(bad)).toThrow('bad.json');
     });
   });
@@ -313,7 +307,7 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
     const BUDGET_MS_PER_SEGMENT = 2;
 
     it('round-trips more segments than one write batch holds', () => {
-      const template = BUNDLED_SEGMENTS[0]!;
+      const template = SYNTHETIC_SEGMENTS[0]!;
       // Each segment sits in its own spatial cell so the constellation index, which pairs segments within a cell, stays linear in this test.
       const segments = Array.from({ length: BATCHED_SEGMENTS }, (_, index) => ({ ...template, id: `batch_${String(index)}`, flightId: `F${String(index)}`, h3Cell: `h3r6_${String(index)}_${String(index)}` }));
       const filePath = join(tempDir, 'batched.json');
@@ -330,20 +324,20 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
   describe('saveDatasetBundle and loadDatasetFile', () => {
     it('serializes and deserializes a DopplerDataset with index and elevation grid', () => {
       const filePath = join(tempDir, 'test-bundle.json');
-      const saved = saveDatasetBundle(filePath, BUNDLED_SEGMENTS, BUNDLED_DEM_GRID);
+      const saved = saveDatasetBundle(filePath, SYNTHETIC_SEGMENTS, SYNTHETIC_DEM_GRID);
 
       expect(saved.version).toBe('1.0.0');
-      expect(saved.segments.length).toBe(BUNDLED_SEGMENTS.length);
+      expect(saved.segments.length).toBe(SYNTHETIC_SEGMENTS.length);
       expect(saved.constellations.length).toBeGreaterThan(0);
-      expect(saved.elevationGrid.length).toBe(BUNDLED_DEM_GRID.length);
+      expect(saved.elevationGrid.length).toBe(SYNTHETIC_DEM_GRID.length);
 
       const loaded = loadDatasetFile(filePath);
       const validated = DopplerDatasetSchema.parse(loaded);
 
       expect(validated.version).toBe('1.0.0');
-      expect(validated.segments.length).toBe(BUNDLED_SEGMENTS.length);
+      expect(validated.segments.length).toBe(SYNTHETIC_SEGMENTS.length);
       expect(validated.constellations.length).toBe(saved.constellations.length);
-      expect(validated.elevationGrid.length).toBe(BUNDLED_DEM_GRID.length);
+      expect(validated.elevationGrid.length).toBe(SYNTHETIC_DEM_GRID.length);
     });
   });
 });

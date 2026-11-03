@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { BUNDLED_DATASET, BUNDLED_GROUND_TRUTH } from '../bundled';
+import { SYNTHETIC_DATASET, SYNTHETIC_GROUND_TRUTH } from '../test-support/synthetic-reference';
 import type { DopplerObservation } from '../schemas';
 import { refineObserverCoordinateGaussNewton, unmatchedObservationLogPenalty } from './gauss-newton';
 import { DopplerSessionEngine } from './session';
 
-/** Start of the first listening episode in epoch seconds: the start time of the bundled alpha segment. */
+/** Start of the first listening episode in epoch seconds: the start time of the synthetic alpha segment. */
 const SESSION_START_EPOCH_SEC = 1788900000;
 /** Pause and resume times in epoch seconds of the first episode in the pause and resume test. */
 const EPISODE_PAUSE_EPOCH_SEC = 1788900500;
@@ -17,7 +17,7 @@ const BRAVO_CPA_TIME_SEC = 1015.3;
 const SECOND_BRAVO_CPA_TIME_SEC = 1944;
 /** Time in seconds on the second recording's own clock at which its flyover peaks. */
 const SEPARATE_RECORDING_CPA_TIME_SEC = 41;
-/** Groundspeed in m/s of the bundled alpha segment, and the speed its observation measures. */
+/** Groundspeed in m/s of the synthetic alpha segment, and the speed its observation measures. */
 const ALPHA_SPEED_MPS = 66.8;
 /** Speed offset in m/s that keeps a decoy or a measurement inside `MAX_ALONG_TRACK_WIND_MPS` of the alpha segment. */
 const WITHIN_WIND_ALLOWANCE_MPS = 12;
@@ -45,7 +45,7 @@ const LOG_POSTERIOR_DIGITS = 9;
 describe('DopplerSessionEngine Bayesian Continuous & Episodic Refinement', () => {
   it('sequentially fuses observations and shrinks the 95% confidence ellipse across pause/resume episodes', () => {
     const engine = new DopplerSessionEngine({
-      dataset: BUNDLED_DATASET,
+      dataset: SYNTHETIC_DATASET,
       ambientTempCelsius: 20.0,
     });
 
@@ -122,8 +122,8 @@ describe('DopplerSessionEngine Bayesian Continuous & Episodic Refinement', () =>
     expect(hypAfterObs2).toBeDefined();
     if (hypAfterObs2 !== undefined) {
       // Coordinates should be close to ground truth (< 150m)
-      const dLat = (hypAfterObs2.lat - BUNDLED_GROUND_TRUTH.lat) * APPROX_METERS_PER_DEG_LAT;
-      const dLon = (hypAfterObs2.lon - BUNDLED_GROUND_TRUTH.lon) * APPROX_METERS_PER_DEG_LON;
+      const dLat = (hypAfterObs2.lat - SYNTHETIC_GROUND_TRUTH.lat) * APPROX_METERS_PER_DEG_LAT;
+      const dLon = (hypAfterObs2.lon - SYNTHETIC_GROUND_TRUTH.lon) * APPROX_METERS_PER_DEG_LON;
       const errMeters = Math.hypot(dLat, dLon);
       expect(errMeters).toBeLessThan(MAX_POSITION_ERROR_METERS);
     }
@@ -165,7 +165,7 @@ describe('DopplerSessionEngine Bayesian Continuous & Episodic Refinement', () =>
   });
 
   it('updates noise floor and flags noise pollution during transient loud bursts', () => {
-    const engine = new DopplerSessionEngine({ dataset: BUNDLED_DATASET });
+    const engine = new DopplerSessionEngine({ dataset: SYNTHETIC_DATASET });
     const ep = engine.startEpisode(NOISE_EPISODE_START_EPOCH_SEC);
 
     // Normal quiet background: -82 dB
@@ -181,7 +181,7 @@ describe('DopplerSessionEngine Bayesian Continuous & Episodic Refinement', () =>
   });
 });
 
-/** A flyover of the bundled alpha segment (66.8 m/s, about 1385 m slant) with overrides for the fields a test varies. */
+/** A flyover of the synthetic alpha segment (66.8 m/s, about 1385 m slant) with overrides for the fields a test varies. */
 function alphaObservation(overrides: Partial<DopplerObservation> & Pick<DopplerObservation, 'id' | 'episodeId'>): DopplerObservation {
   return {
     cpaTimeSec: 94.5,
@@ -230,11 +230,11 @@ const bravoObservation = (id: string, episodeId: string, cpaTimeSec: number): Do
 
 describe('DopplerSessionEngine hypothesis scoring', () => {
   it('replaces an observation re-reported under the same id instead of stacking it', () => {
-    const once = new DopplerSessionEngine({ dataset: BUNDLED_DATASET });
+    const once = new DopplerSessionEngine({ dataset: SYNTHETIC_DATASET });
     const ep = once.startEpisode(SESSION_START_EPOCH_SEC);
     once.ingestObservation(alphaObservation({ id: 'live', episodeId: ep.id }));
 
-    const repeated = new DopplerSessionEngine({ dataset: BUNDLED_DATASET });
+    const repeated = new DopplerSessionEngine({ dataset: SYNTHETIC_DATASET });
     const epRepeated = repeated.startEpisode(SESSION_START_EPOCH_SEC);
     for (let report = 0; report < REPEATED_REPORT_COUNT; report += 1) {
       repeated.ingestObservation(alphaObservation({ id: 'live', episodeId: epRepeated.id }));
@@ -248,10 +248,10 @@ describe('DopplerSessionEngine hypothesis scoring', () => {
   });
 
   it('keeps each match bound to its own observation when a flyover in between fits no segment', () => {
-    const engine = new DopplerSessionEngine({ dataset: BUNDLED_DATASET });
+    const engine = new DopplerSessionEngine({ dataset: SYNTHETIC_DATASET });
     const ep = engine.startEpisode(SESSION_START_EPOCH_SEC);
     engine.ingestObservation(alphaObservation({ id: 'first', episodeId: ep.id }));
-    // 20 m/s is further from every bundled segment (66.8 to 78.5 m/s) than the wind allowance.
+    // 20 m/s is further from every synthetic segment (66.8 to 78.5 m/s) than the wind allowance.
     engine.ingestObservation(
       alphaObservation({
         id: 'stray',
@@ -270,7 +270,7 @@ describe('DopplerSessionEngine hypothesis scoring', () => {
   });
 
   it('does not require episodes recorded separately to share a clock', () => {
-    const engine = new DopplerSessionEngine({ dataset: BUNDLED_DATASET });
+    const engine = new DopplerSessionEngine({ dataset: SYNTHETIC_DATASET });
     const first = engine.startEpisode(SESSION_START_EPOCH_SEC);
     engine.ingestObservation(alphaObservation({ id: 'file_a', episodeId: first.id }));
     // A second file's times start from its own zero, unrelated to the first file's.
@@ -282,13 +282,13 @@ describe('DopplerSessionEngine hypothesis scoring', () => {
   });
 
   it('ranks candidates before the cut so the best fit survives a long candidate list', () => {
-    const alpha = BUNDLED_DATASET.segments.find((segment) => segment.id === 'flyover_alpha');
+    const alpha = SYNTHETIC_DATASET.segments.find((segment) => segment.id === 'flyover_alpha');
     if (alpha === undefined) {
-      throw new Error('bundled dataset lost flyover_alpha');
+      throw new Error('synthetic dataset lost flyover_alpha');
     }
     // Twenty decoys within the wind allowance come before the segment whose speed matches exactly.
     const decoys = Array.from({ length: 20 }, (_, index) => ({ ...alpha, id: `decoy_${String(index)}`, groundspeedMps: alpha.groundspeedMps + WITHIN_WIND_ALLOWANCE_MPS }));
-    const engine = new DopplerSessionEngine({ dataset: { ...BUNDLED_DATASET, segments: [...decoys, alpha] } });
+    const engine = new DopplerSessionEngine({ dataset: { ...SYNTHETIC_DATASET, segments: [...decoys, alpha] } });
     const ep = engine.startEpisode(SESSION_START_EPOCH_SEC);
     engine.ingestObservation(alphaObservation({ id: 'one', episodeId: ep.id }));
 
@@ -296,7 +296,7 @@ describe('DopplerSessionEngine hypothesis scoring', () => {
   });
 
   it('admits a segment whose ground speed differs from the Doppler speed by an ordinary wind', () => {
-    const engine = new DopplerSessionEngine({ dataset: BUNDLED_DATASET });
+    const engine = new DopplerSessionEngine({ dataset: SYNTHETIC_DATASET });
     const ep = engine.startEpisode(SESSION_START_EPOCH_SEC);
     const base = alphaObservation({ id: 'x', episodeId: ep.id });
     engine.ingestObservation({ ...base, kinematics: { ...base.kinematics, inferredSpeedMps: ALPHA_SPEED_MPS - WITHIN_WIND_ALLOWANCE_MPS } });
@@ -305,7 +305,7 @@ describe('DopplerSessionEngine hypothesis scoring', () => {
   });
 
   it('ranks the hypothesis that explains every flyover above one that skips one', () => {
-    const engine = new DopplerSessionEngine({ dataset: BUNDLED_DATASET });
+    const engine = new DopplerSessionEngine({ dataset: SYNTHETIC_DATASET });
     const ep = engine.startEpisode(SESSION_START_EPOCH_SEC);
     engine.ingestObservation(alphaObservation({ id: 'a', episodeId: ep.id }));
     engine.ingestObservation(bravoObservation('b', ep.id, BRAVO_CPA_TIME_SEC));
@@ -318,7 +318,7 @@ describe('DopplerSessionEngine hypothesis scoring', () => {
   });
 
   it('scores a hypothesis by the joint fit of its flyovers, counting each once', () => {
-    const engine = new DopplerSessionEngine({ dataset: BUNDLED_DATASET });
+    const engine = new DopplerSessionEngine({ dataset: SYNTHETIC_DATASET });
     const ep = engine.startEpisode(SESSION_START_EPOCH_SEC);
     const observations = [alphaObservation({ id: 'a', episodeId: ep.id }), bravoObservation('b', ep.id, BRAVO_CPA_TIME_SEC), bravoObservation('c', ep.id, SECOND_BRAVO_CPA_TIME_SEC)];
     for (const observation of observations) {
@@ -331,11 +331,11 @@ describe('DopplerSessionEngine hypothesis scoring', () => {
     }
     const pairs = top.matches.flatMap((match) => {
       const observation = observations.find((candidate) => candidate.id === match.observationId);
-      const segment = BUNDLED_DATASET.segments.find((candidate) => candidate.id === match.segmentId);
+      const segment = SYNTHETIC_DATASET.segments.find((candidate) => candidate.id === match.segmentId);
 
       return observation !== undefined && segment !== undefined ? [{ observation, segment }] : [];
     });
-    const joint = refineObserverCoordinateGaussNewton({ lat: top.lat, lon: top.lon, altMeters: top.altMeters }, pairs, { demGrid: BUNDLED_DATASET.elevationGrid });
+    const joint = refineObserverCoordinateGaussNewton({ lat: top.lat, lon: top.lon, altMeters: top.altMeters }, pairs, { demGrid: SYNTHETIC_DATASET.elevationGrid });
 
     expect(top.matches).toHaveLength(observations.length);
     // Summing each step's refit would count the first flyover three times and drift far from the single joint fit.
@@ -344,7 +344,7 @@ describe('DopplerSessionEngine hypothesis scoring', () => {
 
   it('seeds a new flyover from the segments when the constellation index has no pair for it', () => {
     // A dataset built from traffic holds no precomputed pairs.
-    const engine = new DopplerSessionEngine({ dataset: { ...BUNDLED_DATASET, constellations: [] } });
+    const engine = new DopplerSessionEngine({ dataset: { ...SYNTHETIC_DATASET, constellations: [] } });
     const ep = engine.startEpisode(SESSION_START_EPOCH_SEC);
     // The first flyover matches no segment, so nothing survives it and the second must start from scratch.
     const base = alphaObservation({ id: 'stray', episodeId: ep.id });

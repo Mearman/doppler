@@ -1,8 +1,9 @@
 import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BUNDLED_DATASET, generateBundledReferenceAudio } from '../src/bundled';
+import { SYNTHETIC_DATASET, generateSyntheticReferenceAudio } from '../src/test-support/synthetic-reference';
 import { decimateAudioStream } from '../src/dsp/decimate';
 import { extractDopplerObservations } from '../src/dsp/ridge-tracker';
 import { detectEnfSignature } from '../src/dsp/side-channels';
@@ -188,7 +189,7 @@ describe('Colsto YouTube Geolocation Challenge Audio Verification', { timeout: 6
     }
 
     const engine = new DopplerSessionEngine({
-      dataset: BUNDLED_DATASET,
+      dataset: SYNTHETIC_DATASET,
       ambientTempCelsius: 22.0,
       constraints: { enfNominalHz: '60' },
     });
@@ -240,7 +241,11 @@ describe('Colsto YouTube Geolocation Challenge Audio Verification', { timeout: 6
       return;
     }
 
-    const jsonOut = execSync(`npx tsx cli/doppler.ts locate "${snippet45Path}" --json`, { encoding: 'utf8' });
+    const datasetDir = mkdtempSync(join(tmpdir(), 'doppler-colsto-'));
+    const datasetPath = join(datasetDir, 'dataset.json');
+    writeFileSync(datasetPath, JSON.stringify(SYNTHETIC_DATASET), 'utf8');
+    const jsonOut = execSync(`npx tsx cli/doppler.ts locate "${snippet45Path}" --dataset "${datasetPath}" --json`, { encoding: 'utf8' });
+    rmSync(datasetDir, { recursive: true, force: true });
     const session = LocationSessionSchema.parse(JSON.parse(jsonOut));
     expect(session.observations.length).toBeGreaterThanOrEqual(1);
   });
@@ -248,7 +253,7 @@ describe('Colsto YouTube Geolocation Challenge Audio Verification', { timeout: 6
   it('executes full synthetic benchmark pipeline when external audio fixtures are absent or present', () => {
     /* Guarantees that in CI (or any clean clone without 300MB fixtures), the complete
        passive acoustic inversion pipeline executes assertions and verifies ground truth. */
-    const audio = generateBundledReferenceAudio(2000);
+    const audio = generateSyntheticReferenceAudio(2000);
     const enf = detectEnfSignature(audio.subarray(0, 2000 * 30), 2000);
     expect(enf.detected).toBe(true);
     expect(enf.nominalHz).toBe('50');
@@ -262,7 +267,7 @@ describe('Colsto YouTube Geolocation Challenge Audio Verification', { timeout: 6
     const obs = extractDopplerObservations(spec, { episodeId: 'ci_synth_benchmark', minSnrDb: 6.0 });
     expect(obs.length).toBeGreaterThanOrEqual(1);
 
-    const engine = new DopplerSessionEngine({ dataset: BUNDLED_DATASET });
+    const engine = new DopplerSessionEngine({ dataset: SYNTHETIC_DATASET });
     const ep = engine.startEpisode(1788900000);
     for (const o of obs) {
       engine.ingestObservation({ ...o, episodeId: ep.id });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUNDLED_CONSTELLATIONS, BUNDLED_SEGMENTS } from '../bundled';
+import { SYNTHETIC_CONSTELLATIONS, SYNTHETIC_SEGMENTS } from '../test-support/synthetic-reference';
 import {
   expandConstellationQueryKeys,
   formatConstellationKey,
@@ -7,9 +7,9 @@ import {
   QUERY_BUCKET_SPAN,
 } from './constellation';
 
-/** Groundspeed in m/s of the bundled alpha segment, the first flyover of the key. */
+/** Groundspeed in m/s of the synthetic alpha segment, the first flyover of the key. */
 const ALPHA_SPEED_MPS = 66.8;
-/** Groundspeed in m/s of the bundled bravo segment, the second flyover of the key. */
+/** Groundspeed in m/s of the synthetic bravo segment, the second flyover of the key. */
 const BRAVO_SPEED_MPS = 77.9;
 /** Closest-approach time offset in seconds between the alpha and bravo flyovers: the 920 s between their start times. */
 const ALPHA_BRAVO_DELTA_SEC = 920;
@@ -52,10 +52,10 @@ describe('Constellation Hashing and Multi-Axis Filtering', () => {
     expect(matchesSearchConstraints(target, { enfNominalHz: '60' })).toBe(false);
   });
 
-  it('contains indexed constellation entries for bundled flyovers', () => {
-    expect(BUNDLED_CONSTELLATIONS.length).toBeGreaterThan(0);
-    const entry = BUNDLED_CONSTELLATIONS[0];
+  it('contains indexed constellation entries for synthetic flyovers', () => {
+    expect(SYNTHETIC_CONSTELLATIONS.length).toBeGreaterThan(0);
+    const entry = SYNTHETIC_CONSTELLATIONS[0];
     expect(entry).toBeDefined();
-    expect(entry?.segmentIdA).toBe(BUNDLED_SEGMENTS[0]?.id);
+    expect(entry?.segmentIdA).toBe(SYNTHETIC_SEGMENTS[0]?.id);
   });
 });

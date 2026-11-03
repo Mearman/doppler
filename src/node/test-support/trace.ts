@@ -1,5 +1,5 @@
 /** Builders for raw ADS-B traces used by the ingestion tests. */
-import type { RawAdsbTraceFile } from '../stream-adsb';
+import type { RawAdsbTraceFile } from '../../adsb-traces';
 
 /** One trace sample of a raw `adsb.lol` trace. */
 export type TracePing = RawAdsbTraceFile['trace'][number];

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { BUNDLED_DATASET, BUNDLED_GROUND_TRUTH, BUNDLED_SEGMENTS } from '../src/bundled';
+import { SYNTHETIC_DATASET, SYNTHETIC_GROUND_TRUTH, SYNTHETIC_SEGMENTS } from '../src/test-support/synthetic-reference';
 import { synthesizeMultiFlyoverAudio } from '../src/dsp/side-channels';
 import { writeWavFile } from '../src/node/entry';
 import { DopplerDatasetSchema, LocationSessionSchema } from '../src/schemas';
@@ -16,6 +16,7 @@ describe('CLI Integration Suite (cli/doppler.ts)', { timeout: 30000 }, () => {
   let sessionPath: string;
   let rawAdsbPath: string;
   let datasetOutputPath: string;
+  let datasetPath: string;
 
   beforeAll(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'doppler-cli-test-'));
@@ -23,16 +24,18 @@ describe('CLI Integration Suite (cli/doppler.ts)', { timeout: 30000 }, () => {
     sessionPath = join(tempDir, 'test-session.json');
     rawAdsbPath = join(tempDir, 'raw-adsb.json');
     datasetOutputPath = join(tempDir, 'dataset-out.json');
+    datasetPath = join(tempDir, 'dataset.json');
+    writeFileSync(datasetPath, JSON.stringify(SYNTHETIC_DATASET), 'utf8');
 
     // Synthesize a realistic 120-second flyover WAV
     const sampleRateHz = 2000;
     const durationSec = 120;
-    const seg = BUNDLED_SEGMENTS[0]!;
+    const seg = SYNTHETIC_SEGMENTS[0]!;
     const audio = synthesizeMultiFlyoverAudio({
       sampleRateHz,
       startEpochSec: 1788900000,
       durationSec,
-      observer: BUNDLED_GROUND_TRUTH,
+      observer: SYNTHETIC_GROUND_TRUTH,
       flyovers: [{ segment: seg, baseFreqHz: 115.0, amplitude: 0.9 }],
       noiseStd: 0.005,
     });
@@ -40,14 +43,14 @@ describe('CLI Integration Suite (cli/doppler.ts)', { timeout: 30000 }, () => {
 
     // Save initial valid session
     const engine = new DopplerSessionEngine({
-      dataset: BUNDLED_DATASET,
+      dataset: SYNTHETIC_DATASET,
       ambientTempCelsius: 20.0,
     });
     const initialSession = engine.getSession();
     writeFileSync(sessionPath, JSON.stringify(initialSession, null, 2), 'utf8');
 
     // Save raw flight segments for ingest test
-    writeFileSync(rawAdsbPath, JSON.stringify(BUNDLED_SEGMENTS.slice(0, 3), null, 2), 'utf8');
+    writeFileSync(rawAdsbPath, JSON.stringify(SYNTHETIC_SEGMENTS.slice(0, 3), null, 2), 'utf8');
   });
 
   afterAll(() => {
@@ -73,13 +76,19 @@ describe('CLI Integration Suite (cli/doppler.ts)', { timeout: 30000 }, () => {
   });
 
   it('executes locate command with human-readable and JSON output formats', () => {
-    const humanOut = execSync(`npx tsx cli/doppler.ts locate "${audioPath}"`, { encoding: 'utf8' });
+    const humanOut = execSync(`npx tsx cli/doppler.ts locate "${audioPath}" --dataset "${datasetPath}"`, { encoding: 'utf8' });
     expect(humanOut).toContain('Doppler Geolocation Results');
     expect(humanOut).toContain('Flyovers Found:');
 
-    const jsonOut = execSync(`npx tsx cli/doppler.ts locate "${audioPath}" --json`, { encoding: 'utf8' });
+    const jsonOut = execSync(`npx tsx cli/doppler.ts locate "${audioPath}" --dataset "${datasetPath}" --json`, { encoding: 'utf8' });
     const parsed = LocationSessionSchema.parse(JSON.parse(jsonOut));
     expect(parsed.observations.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('refuses to locate without a dataset, since no flight data is built in', () => {
+    const run = (): Buffer => execSync(`npx tsx cli/doppler.ts locate "${audioPath}"`, { stdio: 'pipe' });
+
+    expect(run).toThrow(/--dataset <dataset\.json> is required/);
   });
 
   it('executes ingest command to generate DopplerDataset bundle', () => {
@@ -94,7 +103,7 @@ describe('CLI Integration Suite (cli/doppler.ts)', { timeout: 30000 }, () => {
   });
 
   it('executes session command to incrementally append audio observations', () => {
-    const sessionOut = execSync(`npx tsx cli/doppler.ts session "${sessionPath}" --add-audio "${audioPath}"`, {
+    const sessionOut = execSync(`npx tsx cli/doppler.ts session "${sessionPath}" --add-audio "${audioPath}" --dataset "${datasetPath}"`, {
       encoding: 'utf8',
     });
     expect(sessionOut).toContain('Updated session');

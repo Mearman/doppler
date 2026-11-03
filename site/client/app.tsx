@@ -3,17 +3,17 @@ import { createRoot } from 'react-dom/client';
 import { Alert, Button, MantineProvider, Progress } from '@mantine/core';
 import '@mantine/core/styles.css';
 import { decodeAudioFile, isWav } from '../../src/browser/decode-audio';
-import { generateBundledReferenceAudio } from '../../src/bundled';
 import { ANALYSIS_STAGES, type AnalysisStage } from './worker-protocol';
 import * as styles from '../styles.css';
-import { SIMULATED_EPISODE_ID } from './demo';
 import { MapIcon, WaveIcon } from './icons';
 import { LocationMap } from './location-map';
 import { NavTabs, type NavId, panelId, tabId } from './nav-tabs';
 import { useOfflineStatus } from './offline-status';
-import { FilePanel, ListenPanel, ResultPanel, SessionPanel } from './panels';
+import { DataPanel, FilePanel, ListenPanel, ResultPanel, SessionPanel } from './panels';
 import { SpectrogramViewer } from './spectrogram-viewer';
 import { TopBar } from './top-bar';
+import { useFlightData } from './use-flight-data';
+import { type SearchArea, useLiveFeed } from './use-live-feed';
 import { useMicrophone } from './use-microphone';
 import { useSolver } from './use-solver';
 
@@ -29,23 +29,24 @@ const STAGE_LABELS: Readonly<Record<AnalysisStage, string>> = {
 /** Bytes at the start of a file that the WAV check reads: the RIFF tag, its size field and the WAVE form type. */
 const WAV_SNIFF_BYTES = 12;
 
-/** Sample rate of the built-in simulated recording, in hertz. */
-const SIMULATION_SAMPLE_RATE_HZ = 2000;
-
-/** Start time given to the simulated recording, which places it on a fixed date so the bundled reference data matches it. */
-const SIMULATION_START_EPOCH_SEC = 1788900000;
-
 type StageView = 'map' | 'spectrogram';
 
 export function App(): React.JSX.Element {
   const solver = useSolver();
   const { session, analysis } = solver;
+  const flightData = useFlightData(solver);
+  const [searchArea, setSearchArea] = useState<SearchArea>({ lat: 0, lon: 0, radiusKm: 0 });
+  const liveFeed = useLiveFeed(solver, searchArea);
   const microphone = useMicrophone({ onObservation: solver.ingestObservation, onError: solver.reportError });
   // A release installs by itself only while nothing is running; the session is autosaved, so the reload keeps the results.
   const offline = useOfflineStatus({ safeToReload: analysis === null && !microphone.isListening });
   const [activeTab, setActiveTab] = useState<NavId>('listen');
   const [stageView, setStageView] = useState<StageView>('map');
   const busy = analysis !== null;
+  const hasFlightData = solver.datasetInfo !== null && solver.datasetInfo.segmentCount > 0;
+  const openData = (): void => {
+    setActiveTab('data');
+  };
 
   // A session resumed from storage opens on its result, so a reload returns the person to what they were looking at.
   const resumed = useRef(false);
@@ -66,15 +67,6 @@ export function App(): React.JSX.Element {
     }
     wasBusy.current = busy;
   }, [busy]);
-
-  const simulate = (): void => {
-    const audio = generateBundledReferenceAudio(SIMULATION_SAMPLE_RATE_HZ);
-    solver.startAnalysis(
-      { id: `sim_${String(Date.now())}`, type: 'process_audio', payload: { rawSamples: audio, sampleRateHz: SIMULATION_SAMPLE_RATE_HZ, startEpochSec: SIMULATION_START_EPOCH_SEC, episodeId: SIMULATED_EPISODE_ID } },
-      'Analysing the simulated flyover stream',
-      [audio.buffer],
-    );
-  };
 
   const analyseFile = async (file: Readonly<File>): Promise<void> => {
     try {
@@ -99,14 +91,15 @@ export function App(): React.JSX.Element {
     listen: (
       <ListenPanel
         microphone={microphone}
-        busy={busy}
         flyoverCount={solver.clipSummary?.observationCount ?? session?.observations.length ?? 0}
         hypothesisCount={session?.hypotheses.length ?? 0}
-        onSimulate={simulate}
+        hasFlightData={hasFlightData}
+        onOpenData={openData}
       />
     ),
     file: <FilePanel busy={busy} onFile={analyseFile} session={session} />,
-    result: <ResultPanel session={session} />,
+    data: <DataPanel info={solver.datasetInfo} flightData={flightData} liveFeed={liveFeed} />,
+    result: <ResultPanel session={session} hasFlightData={hasFlightData} onOpenData={openData} />,
     session: <SessionPanel session={session} />,
   };
 
@@ -164,7 +157,7 @@ export function App(): React.JSX.Element {
             </button>
           </div>
           <div className={styles.stagePane} data-hidden={stageView !== 'map'}>
-            <LocationMap session={session} onOpenResult={() => { setActiveTab('result'); }} />
+            <LocationMap session={session} onOpenResult={() => { setActiveTab('result'); }} onAreaChange={setSearchArea} />
           </div>
           <div className={`${styles.stagePane} ${styles.spectrogramPane}`} data-hidden={stageView !== 'spectrogram'}>
             <SpectrogramViewer

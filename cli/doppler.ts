@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
 import { z } from 'zod';
-import { BUNDLED_DATASET } from '../src/bundled';
 import { decimateAudioStream } from '../src/dsp/decimate';
 import { extractDopplerObservations } from '../src/dsp/ridge-tracker';
 import { detectEnfSignature } from '../src/dsp/side-channels';
 import { computeDopplerSpectrogram } from '../src/dsp/spectrogram';
 import { type BoundingBox, loadDatasetFile, readAdsbArchiveSegments, readAdsbSegments, readWavFile, saveDatasetBundle } from '../src/node/entry';
-import { LocationSessionSchema } from '../src/schemas';
+import { type DopplerDataset, LocationSessionSchema } from '../src/schemas';
 import { DopplerSessionEngine } from '../src/solver/session';
 
 const PackageManifest = z.object({
@@ -45,17 +44,33 @@ function formatCpaTime(cpaTimeSec: number): string {
   return mins > 0 ? `${String(mins)}m ${secs}s` : `${secs}s`;
 }
 
+/**
+ * Loads the flight dataset named by `--dataset`, which locating needs and which has no default: a location is only as real as the flight data behind it.
+ * @param args - The command line arguments after the program name.
+ * @returns The parsed dataset; the process exits with an error when the option is missing.
+ */
+function requireDataset(args: readonly string[]): DopplerDataset {
+  const index = args.indexOf('--dataset');
+  const datasetPath = index === -1 ? undefined : args[index + 1];
+  if (datasetPath === undefined || datasetPath.startsWith('--')) {
+    console.error('Error: --dataset <dataset.json> is required. Build one with `doppler ingest` or download a day from https://huggingface.co/datasets/Mearman/doppler-adsb');
+    process.exit(1);
+  }
+
+  return loadDatasetFile(datasetPath);
+}
+
 function printHelp(): void {
   console.log(`
 doppler - Offline and real-time aircraft Doppler audio geolocation
 
 Usage:
-  doppler locate <audio.wav> [options]
-  doppler session <session.json> --add-audio <audio.wav>
+  doppler locate <audio.wav> --dataset <dataset.json> [options]
+  doppler session <session.json> --add-audio <audio.wav> --dataset <dataset.json>
   doppler ingest --input <adsb.json|directory|-> --out <dataset.json> [--date <YYYY-MM-DD>] [--bbox <minLat,minLon,maxLat,maxLon>]
 
 Options:
-  --dataset <path>    Path to a custom DopplerDataset .json file (defaults to bundled dataset)
+  --dataset <path>    Path to a DopplerDataset .json file, from 'doppler ingest' or the Hugging Face dataset (required by locate and session)
   --date <YYYY-MM-DD> For ingest: date of raw traces that carry no timestamp
   --bbox <a,b,c,d>    For ingest: keep segments touching minLat,minLon,maxLat,maxLon
                       (--input - reads an adsb.lol globe_history tar from stdin)
@@ -88,8 +103,6 @@ async function run(): Promise<void> {
       process.exit(1);
     }
 
-    const datasetIdx = args.indexOf('--dataset');
-    const datasetPath = datasetIdx !== -1 ? args[datasetIdx + 1] : undefined;
     const tempIdx = args.indexOf('--temp');
     const ambientTemp = tempIdx !== -1 ? Number(args[tempIdx + 1]) : 20.0;
     if (!Number.isFinite(ambientTemp)) {
@@ -98,7 +111,7 @@ async function run(): Promise<void> {
     }
     const isJson = args.includes('--json');
 
-    const dataset = datasetPath !== undefined ? loadDatasetFile(datasetPath) : BUNDLED_DATASET;
+    const dataset = requireDataset(args);
     const { samples, sampleRateHz } = readWavFile(audioPath);
 
     const decimated = decimateAudioStream(samples, sampleRateHz, 2000);
@@ -170,7 +183,7 @@ async function run(): Promise<void> {
     const audioPath = addIdx !== -1 ? args[addIdx + 1] : undefined;
 
     if (sessionPath === undefined || audioPath === undefined) {
-      console.error('Usage: doppler session <session.json> --add-audio <file.wav>');
+      console.error('Usage: doppler session <session.json> --add-audio <file.wav> --dataset <dataset.json>');
       process.exit(1);
     }
 
@@ -193,7 +206,7 @@ async function run(): Promise<void> {
 
     const engine = new DopplerSessionEngine({
       initialSession,
-      dataset: BUNDLED_DATASET,
+      dataset: requireDataset(args),
     });
 
     const episode = engine.startEpisode(Math.floor(Date.now() / 1000));

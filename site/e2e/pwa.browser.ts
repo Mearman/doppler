@@ -1,6 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { generateBundledReferenceAudio } from '../../src/bundled';
-import { encodeWavPcm16 } from '../../src/dsp/wav';
+import { SYNTHETIC_WAV, analyseSyntheticClip, loadSyntheticFlightData } from './support';
 
 interface Box {
   readonly width: number;
@@ -25,15 +24,9 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     await expect(page.getByRole('region', { name: 'Spectrogram' })).toBeVisible();
     await expect(page.locator('canvas')).toBeVisible();
 
-    // Live Monitor tab has simulation button
-    const simButton = page.locator('button:has-text("Simulate Flyover Stream")');
-    await expect(simButton).toBeVisible();
-
-    // Click simulate flyover stream
-    await simButton.click();
-
-    // Expect status message, hypothesis card, and spectrogram flyover detection to appear
-    await expect(page.getByText('Estimated location')).toBeVisible({ timeout: 30000 });
+    // Flight data and a recording give a located result.
+    await loadSyntheticFlightData(page);
+    await analyseSyntheticClip(page);
     await expect(page.getByText('Clip analysis', { exact: true })).toBeVisible({ timeout: 10000 });
     await expect(page.getByText(/flyovers? detected/)).toBeVisible({ timeout: 10000 });
   });
@@ -66,11 +59,7 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     await page.getByRole('tab', { name: /file/i }).click();
     await expect(page.getByText('Upload audio or video')).toBeVisible();
 
-    // The recording is synthesised so the test needs no fixture file, which are gitignored and absent in CI.
-    const sampleRateHz = 2000;
-    const wav = encodeWavPcm16(generateBundledReferenceAudio(sampleRateHz), sampleRateHz);
-    const fileInput = page.locator('input[type="file"]');
-    await fileInput.setInputFiles({ name: 'synthetic-flyovers.wav', mimeType: 'audio/wav', buffer: Buffer.from(wav) });
+    await page.locator('input[type="file"]').setInputFiles(SYNTHETIC_WAV);
 
     // The analysis ends on the result, and the spectrogram switches to the clip with its flyovers marked.
     await expect(page.getByRole('list', { name: 'Detected flyovers' })).toBeVisible({ timeout: 15000 });
@@ -78,16 +67,18 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     await expect(page.getByText(/flyovers? detected/)).toBeVisible({ timeout: 15000 });
   });
 
-  test('reloads and analyses audio with the network off after the first visit', async ({ page, context }) => {
+  test('reloads with the network off, keeps the loaded flight data and analyses audio', async ({ page, context }) => {
     await page.goto('/');
     await expect(page.getByText('Offline ready', { exact: true })).toBeVisible({ timeout: 10000 });
+    await loadSyntheticFlightData(page);
     // No intermediate reload: the worker and its chunks must come from the precache, not from runtime caching of an earlier controlled load.
     await context.setOffline(true);
     await page.reload();
 
     await expect(page.getByText('Offline: stored map tiles only', { exact: true })).toBeVisible({ timeout: 10000 });
-    await page.locator('button:has-text("Simulate Flyover Stream")').click();
-    await expect(page.getByText('Estimated location')).toBeVisible({ timeout: 30000 });
+    await page.getByRole('tab', { name: /data/i }).click();
+    await expect(page.getByText('Flight segments')).toBeVisible({ timeout: 10000 });
+    await analyseSyntheticClip(page);
   });
 
   test('reports a file the browser cannot decode as an alert and lets the same file be chosen again', async ({ page }) => {
@@ -113,8 +104,8 @@ test.describe('Doppler PWA Offline Geolocation', () => {
 
   test('resumes the saved session after a reload', async ({ page }) => {
     await page.goto('/');
-    await page.locator('button:has-text("Simulate Flyover Stream")').click();
-    await expect(page.getByText('Estimated location')).toBeVisible({ timeout: 30000 });
+    await loadSyntheticFlightData(page);
+    await analyseSyntheticClip(page);
 
     await page.reload();
 
@@ -144,8 +135,8 @@ test.describe('Doppler PWA Offline Geolocation', () => {
 
     test('shows one of the map and spectrogram at a time, each filling the stage, with no sideways scroll', async ({ page }) => {
       await page.goto('/');
-      await page.locator('button:has-text("Simulate Flyover Stream")').click();
-      await expect(page.getByText('Estimated location')).toBeVisible({ timeout: 30000 });
+      await loadSyntheticFlightData(page);
+      await analyseSyntheticClip(page);
 
       const measure = async (): Promise<{ scrollWidth: number; clientWidth: number; map: Box; canvas: Box; bar: Box }> =>
         page.evaluate(() => {
