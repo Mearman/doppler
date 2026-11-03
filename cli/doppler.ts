@@ -10,6 +10,16 @@ import { loadDatasetFile, readWavFile, saveDatasetBundle } from '../src/node/ent
 import { LinearFlightSegment, LocationSession } from '../src/schemas';
 import { DopplerSessionEngine } from '../src/solver/session';
 
+function formatCpaTime(cpaTimeSec: number): string {
+  if (cpaTimeSec > 1_000_000_000) {
+    return new Date(cpaTimeSec * 1000).toLocaleTimeString();
+  }
+  const mins = Math.floor(cpaTimeSec / 60);
+  const secs = (cpaTimeSec % 60).toFixed(1);
+
+  return mins > 0 ? `${String(mins)}m ${secs}s` : `${secs}s`;
+}
+
 function printHelp(): void {
   console.log(`
 doppler - Offline and real-time aircraft Doppler audio geolocation
@@ -102,7 +112,8 @@ function run(): void {
     for (let i = 0; i < observations.length; i += 1) {
       const o = observations[i];
       if (o !== undefined) {
-        console.log(`  [#${String(i + 1)}] CPA: ${o.cpaTimeSec.toFixed(1)}s, Base: ${o.kinematics.baseFreqHz.toFixed(1)}Hz, Speed: ${o.kinematics.inferredSpeedMps.toFixed(1)}m/s, Slant: ${o.kinematics.inferredSlantMeters.toFixed(0)}m, SNR: ${o.snrDb.toFixed(1)}dB`);
+        const timeLabel = formatCpaTime(o.cpaTimeSec);
+        console.log(`  [#${String(i + 1)}] CPA: ${timeLabel}, Base: ${o.kinematics.baseFreqHz.toFixed(1)}Hz, Speed: ${o.kinematics.inferredSpeedMps.toFixed(1)}m/s, Slant: ${o.kinematics.inferredSlantMeters.toFixed(0)}m, SNR: ${o.snrDb.toFixed(1)}dB`);
       }
     }
 

@@ -12,6 +12,16 @@ import type { LocationHypothesis, LocationSession } from '../../src/schemas';
 import * as styles from '../styles.css';
 import { SpectrogramViewer, type ClipSpectrogramData } from './spectrogram-viewer';
 
+function formatCpaTimestamp(cpaTimeSec: number): string {
+  if (cpaTimeSec > 1_000_000_000) {
+    return new Date(cpaTimeSec * 1000).toLocaleTimeString();
+  }
+  const mins = Math.floor(cpaTimeSec / 60);
+  const secs = (cpaTimeSec % 60).toFixed(1);
+
+  return mins > 0 ? `${String(mins)}m ${secs}s` : `${secs}s`;
+}
+
 export function App(): React.JSX.Element {
   const [session, setSession] = useState<LocationSession | null>(null);
   const [activeTab, setActiveTab] = useState<string | null>('live');
@@ -46,7 +56,10 @@ export function App(): React.JSX.Element {
         setIsNoisePolluted(isPolluted);
       },
       onObservationDetected: (observation) => {
-        setStatusMessage(`Captured aircraft flyover at ${observation.cpaTimeSec.toFixed(1)}s! Refining location...`);
+        const timeLabel = formatCpaTimestamp(observation.cpaTimeSec);
+        setStatusMessage(
+          `Captured aircraft flyover at ${timeLabel} (${observation.kinematics.baseFreqHz.toFixed(1)} Hz, ${observation.kinematics.inferredSpeedMps.toFixed(0)} m/s)! Refining location...`,
+        );
         workerRef.current?.postMessage({
           id: `obs_${String(Date.now())}`,
           type: 'ingest_observation',

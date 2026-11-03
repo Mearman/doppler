@@ -2,20 +2,26 @@ import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { BUNDLED_DATASET } from '../src/bundled';
 import { decimateAudioStream } from '../src/dsp/decimate';
 import { extractDopplerObservations } from '../src/dsp/ridge-tracker';
 import { detectEnfSignature } from '../src/dsp/side-channels';
 import { computeDopplerSpectrogram } from '../src/dsp/spectrogram';
 import { readWavFile } from '../src/node/entry';
 import { LocationSession } from '../src/schemas';
+import { DopplerSessionEngine } from '../src/solver/session';
 
 describe('Colsto YouTube Geolocation Challenge Audio Verification', { timeout: 60000 }, () => {
   const fullAudioPath = join(import.meta.dirname, '../fixtures/colsto-unknown-location-raw-audio.wav');
-  const snippetAudioPath = join(import.meta.dirname, '../fixtures/colsto-flyover-36m.wav');
+  const snippet36Path = join(import.meta.dirname, '../fixtures/colsto-flyover-36m.wav');
+  const snippet23Path = join(import.meta.dirname, '../fixtures/colsto-flyover-23m.wav');
+  const snippet35Path = join(import.meta.dirname, '../fixtures/colsto-flyover-35m.wav');
+  const snippet45Path = join(import.meta.dirname, '../fixtures/colsto-flyover-45m.wav');
+  const snippet51Path = join(import.meta.dirname, '../fixtures/colsto-flyover-51m.wav');
+  const snippet54Path = join(import.meta.dirname, '../fixtures/colsto-flyover-54m.wav');
 
   it('detects 60 Hz ENF power grid hum signature from colsto challenge recording', () => {
     if (!existsSync(fullAudioPath)) {
-      // Skip if full 300MB fixture is absent in environment
       return;
     }
 
@@ -33,12 +39,12 @@ describe('Colsto YouTube Geolocation Challenge Audio Verification', { timeout: 6
     expect(enf.regionHint).toContain('60 Hz Grid');
   });
 
-  it('detects the primary aircraft flyover S-curve at 36:00 from the colsto audio clip', () => {
-    if (!existsSync(snippetAudioPath)) {
+  it('detects the primary aircraft flyover S-curve at 36:00 (snippet 36m)', () => {
+    if (!existsSync(snippet36Path)) {
       return;
     }
 
-    const { samples, sampleRateHz } = readWavFile(snippetAudioPath);
+    const { samples, sampleRateHz } = readWavFile(snippet36Path);
     const decimated = decimateAudioStream(samples, sampleRateHz, 2000);
     const spec = computeDopplerSpectrogram(decimated.samples, {
       sampleRateHz: 2000,
@@ -49,7 +55,7 @@ describe('Colsto YouTube Geolocation Challenge Audio Verification', { timeout: 6
       maxFreqHz: 450,
     });
 
-    const observations = extractDopplerObservations(spec, { episodeId: 'colsto_snippet', minSnrDb: 6.0 });
+    const observations = extractDopplerObservations(spec, { episodeId: 'colsto_snippet_36', minSnrDb: 6.0 });
     expect(observations.length).toBeGreaterThanOrEqual(1);
 
     const primary = observations.find((o) => o.kinematics.baseFreqHz > 105 && o.kinematics.baseFreqHz < 120);
@@ -64,12 +70,177 @@ describe('Colsto YouTube Geolocation Challenge Audio Verification', { timeout: 6
     }
   });
 
-  it('runs doppler CLI locate on the colsto flyover snippet and outputs valid JSON session', () => {
-    if (!existsSync(snippetAudioPath)) {
+  it('detects aircraft Doppler flyover in the 23-minute segment (snippet 23m)', () => {
+    if (!existsSync(snippet23Path)) {
       return;
     }
 
-    const jsonOut = execSync(`npx tsx cli/doppler.ts locate "${snippetAudioPath}" --json`, { encoding: 'utf8' });
+    const { samples, sampleRateHz } = readWavFile(snippet23Path);
+    const decimated = decimateAudioStream(samples, sampleRateHz, 2000);
+    const spec = computeDopplerSpectrogram(decimated.samples, {
+      sampleRateHz: 2000,
+      startTimeSec: 1395,
+      fftSize: 2048,
+      hopSamples: 500,
+      minFreqHz: 65,
+      maxFreqHz: 450,
+    });
+
+    const observations = extractDopplerObservations(spec, { episodeId: 'colsto_snippet_23', minSnrDb: 5.0 });
+    expect(observations.length).toBeGreaterThanOrEqual(1);
+
+    const obs = observations.find((o) => o.kinematics.baseFreqHz >= 75 && o.kinematics.baseFreqHz <= 85);
+    expect(obs).toBeDefined();
+    if (obs !== undefined) {
+      expect(obs.kinematics.inferredSpeedMps).toBeCloseTo(19.6, 1);
+      expect(obs.snrDb).toBeGreaterThan(25.0);
+    }
+  });
+
+  it('detects two consecutive aircraft flyovers in the 35-minute segment (snippet 35m)', () => {
+    if (!existsSync(snippet35Path)) {
+      return;
+    }
+
+    const { samples, sampleRateHz } = readWavFile(snippet35Path);
+    const decimated = decimateAudioStream(samples, sampleRateHz, 2000);
+    const spec = computeDopplerSpectrogram(decimated.samples, {
+      sampleRateHz: 2000,
+      startTimeSec: 2120,
+      fftSize: 2048,
+      hopSamples: 500,
+      minFreqHz: 65,
+      maxFreqHz: 450,
+    });
+
+    const observations = extractDopplerObservations(spec, { episodeId: 'colsto_snippet_35', minSnrDb: 5.0 });
+    expect(observations.length).toBeGreaterThanOrEqual(2);
+    expect(observations[0]?.snrDb).toBeGreaterThan(28.0);
+    expect(observations[1]?.snrDb).toBeGreaterThan(28.0);
+  });
+
+  it('detects low-altitude approach flyovers in the 45-minute segment (snippet 45m)', () => {
+    if (!existsSync(snippet45Path)) {
+      return;
+    }
+
+    const { samples, sampleRateHz } = readWavFile(snippet45Path);
+    const decimated = decimateAudioStream(samples, sampleRateHz, 2000);
+    const spec = computeDopplerSpectrogram(decimated.samples, {
+      sampleRateHz: 2000,
+      startTimeSec: 2700,
+      fftSize: 2048,
+      hopSamples: 500,
+      minFreqHz: 65,
+      maxFreqHz: 450,
+    });
+
+    const observations = extractDopplerObservations(spec, { episodeId: 'colsto_snippet_45', minSnrDb: 5.0 });
+    expect(observations.length).toBeGreaterThanOrEqual(2);
+
+    const sustained = observations.find((o) => o.ridgePoints.length > 50);
+    expect(sustained).toBeDefined();
+    if (sustained !== undefined) {
+      expect(sustained.kinematics.baseFreqHz).toBeCloseTo(101.4, 1);
+      expect(sustained.snrDb).toBeGreaterThan(28.0);
+    }
+  });
+
+  it('detects flyovers in the 51m and 54m segments', () => {
+    if (!existsSync(snippet51Path) || !existsSync(snippet54Path)) {
+      return;
+    }
+
+    // 51m snippet
+    const audio51 = readWavFile(snippet51Path);
+    const dec51 = decimateAudioStream(audio51.samples, audio51.sampleRateHz, 2000);
+    const spec51 = computeDopplerSpectrogram(dec51.samples, {
+      sampleRateHz: 2000,
+      startTimeSec: 3050,
+      fftSize: 2048,
+      hopSamples: 500,
+      minFreqHz: 65,
+      maxFreqHz: 450,
+    });
+    const obs51 = extractDopplerObservations(spec51, { episodeId: 'colsto_snippet_51', minSnrDb: 5.0 });
+    expect(obs51.length).toBeGreaterThanOrEqual(1);
+    expect(obs51[0]?.kinematics.baseFreqHz).toBeCloseTo(152.8, 1);
+
+    // 54m snippet
+    const audio54 = readWavFile(snippet54Path);
+    const dec54 = decimateAudioStream(audio54.samples, audio54.sampleRateHz, 2000);
+    const spec54 = computeDopplerSpectrogram(dec54.samples, {
+      sampleRateHz: 2000,
+      startTimeSec: 3265,
+      fftSize: 2048,
+      hopSamples: 500,
+      minFreqHz: 65,
+      maxFreqHz: 450,
+    });
+    const obs54 = extractDopplerObservations(spec54, { episodeId: 'colsto_snippet_54', minSnrDb: 5.0 });
+    expect(obs54.length).toBeGreaterThanOrEqual(1);
+    expect(obs54[0]?.kinematics.baseFreqHz).toBeCloseTo(79.1, 1);
+  });
+
+  it('sequentially fuses multi-episode flyovers into a single LocationSession', () => {
+    if (!existsSync(snippet23Path) || !existsSync(snippet35Path) || !existsSync(snippet45Path)) {
+      return;
+    }
+
+    const engine = new DopplerSessionEngine({
+      dataset: BUNDLED_DATASET,
+      ambientTempCelsius: 22.0,
+      constraints: { enfNominalHz: '60' },
+    });
+
+    // Episode 1: 23m segment
+    const ep1 = engine.startEpisode(1395);
+    const audio23 = readWavFile(snippet23Path);
+    const dec23 = decimateAudioStream(audio23.samples, audio23.sampleRateHz, 2000);
+    const spec23 = computeDopplerSpectrogram(dec23.samples, {
+      sampleRateHz: 2000,
+      startTimeSec: 1395,
+      fftSize: 2048,
+      hopSamples: 500,
+      minFreqHz: 65,
+      maxFreqHz: 450,
+    });
+    const obs23 = extractDopplerObservations(spec23, { episodeId: ep1.id, minSnrDb: 5.0 });
+    for (const o of obs23) {
+      engine.ingestObservation(o);
+    }
+    engine.pauseEpisode(ep1.id, 1435);
+
+    // Episode 2: 35m segment
+    const ep2 = engine.startEpisode(2120);
+    const audio35 = readWavFile(snippet35Path);
+    const dec35 = decimateAudioStream(audio35.samples, audio35.sampleRateHz, 2000);
+    const spec35 = computeDopplerSpectrogram(dec35.samples, {
+      sampleRateHz: 2000,
+      startTimeSec: 2120,
+      fftSize: 2048,
+      hopSamples: 500,
+      minFreqHz: 65,
+      maxFreqHz: 450,
+    });
+    const obs35 = extractDopplerObservations(spec35, { episodeId: ep2.id, minSnrDb: 5.0 });
+    for (const o of obs35) {
+      engine.ingestObservation(o);
+    }
+    engine.pauseEpisode(ep2.id, 2160);
+
+    const session = engine.getSession();
+    expect(session.episodes.length).toBe(2);
+    expect(session.observations.length).toBe(obs23.length + obs35.length);
+    expect(session.constraints.enfNominalHz).toBe('60');
+  });
+
+  it('runs doppler CLI locate on the 45m snippet and outputs valid JSON session', () => {
+    if (!existsSync(snippet45Path)) {
+      return;
+    }
+
+    const jsonOut = execSync(`npx tsx cli/doppler.ts locate "${snippet45Path}" --json`, { encoding: 'utf8' });
     const session = LocationSession.parse(JSON.parse(jsonOut));
     expect(session.observations.length).toBeGreaterThanOrEqual(1);
   });
