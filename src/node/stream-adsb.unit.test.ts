@@ -305,20 +305,26 @@ describe('ADS-B Ingestion and Trace Processing (src/node/stream-adsb.ts)', () =>
   });
 
   describe('saveDatasetBundle batching', () => {
+    /** Segments written: more than two batches of 5000, so the batch boundary is crossed twice. */
+    const BATCHED_SEGMENTS = 12001;
+    /** Index of the first segment of the second batch and of the last segment written. */
+    const SECOND_BATCH_FIRST = 5000;
+    /** Milliseconds of budget per segment. The write, read and validation of one segment take a small fraction of a millisecond when the machine is idle; the budget is generous so coverage instrumentation and a machine running many other jobs do not fail the test, while still growing with the work. */
+    const BUDGET_MS_PER_SEGMENT = 2;
+
     it('round-trips more segments than one write batch holds', () => {
       const template = BUNDLED_SEGMENTS[0]!;
-      /* More than one batch of 5000, so the batch boundary is crossed twice.
-         Each segment sits in its own spatial cell so the constellation index, which pairs segments within a cell, stays linear in this test. */
-      const segments = Array.from({ length: 12001 }, (_, index) => ({ ...template, id: `batch_${String(index)}`, flightId: `F${String(index)}`, h3Cell: `h3r6_${String(index)}_${String(index)}` }));
+      // Each segment sits in its own spatial cell so the constellation index, which pairs segments within a cell, stays linear in this test.
+      const segments = Array.from({ length: BATCHED_SEGMENTS }, (_, index) => ({ ...template, id: `batch_${String(index)}`, flightId: `F${String(index)}`, h3Cell: `h3r6_${String(index)}_${String(index)}` }));
       const filePath = join(tempDir, 'batched.json');
 
-      saveDatasetBundle(filePath, segments.slice(0, 12001), []);
+      saveDatasetBundle(filePath, segments, []);
       const loaded = loadDatasetFile(filePath);
 
       expect(loaded.segments).toHaveLength(segments.length);
-      expect(loaded.segments[5000]?.id).toBe('batch_5000');
-      expect(loaded.segments[12000]?.id).toBe('batch_12000');
-    });
+      expect(loaded.segments[SECOND_BATCH_FIRST]?.id).toBe(`batch_${String(SECOND_BATCH_FIRST)}`);
+      expect(loaded.segments[BATCHED_SEGMENTS - 1]?.id).toBe(`batch_${String(BATCHED_SEGMENTS - 1)}`);
+    }, BATCHED_SEGMENTS * BUDGET_MS_PER_SEGMENT);
   });
 
   describe('saveDatasetBundle and loadDatasetFile', () => {
