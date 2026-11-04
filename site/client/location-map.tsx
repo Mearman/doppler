@@ -1,6 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { locateDevice } from '../../src/browser/locate';
+import { loadMapView, saveMapView } from '../../src/browser/storage';
 import { ellipseOutline } from '../../src/physics/geo';
 import type { LocationSession } from '../../src/schemas';
 import * as styles from '../styles.css';
@@ -14,7 +16,10 @@ const METRES_PER_KM = 1000;
 /** Zoom level a located observer is shown at, close enough to read streets. */
 const LOCATED_ZOOM = 13;
 
-/** View before any estimate exists: the whole world, since nothing yet says where the listener is. */
+/** Zoom level a located device is shown at: about 60 km across at a desktop width, wide enough for the live feed to cover and close enough to see local traffic. */
+const LOCATE_ZOOM = 11;
+
+/** View on a first visit: the whole world, since nothing yet says where the listener is. Afterwards the page reopens on the view it was left on. */
 const INITIAL_CENTRE: L.LatLngTuple = [20, 0];
 const INITIAL_ZOOM = 2;
 
@@ -25,16 +30,18 @@ export interface LocationMapProps {
   readonly onOpenResult: () => void;
   /** Called with the visible area after the map is first laid out and after every move or zoom. */
   readonly onAreaChange: (area: Readonly<SearchArea>) => void;
+  /** Called with a sentence when the device's position cannot be found. */
+  readonly onError: (message: string) => void;
 }
 
 /**
  * The map of candidate locations: the leading estimate and its 95% ellipse.
  * Leaflet measures its container once, so a resize observer keeps tiles placed through a rotation or a layout change.
- * @param props - The session to draw, the handler for the estimate chip and the handler told which area is visible.
+ * @param props - The session to draw, the handler for the estimate chip, the handler told which area is visible and the handler for a failed locate.
  * @returns The map and, once an estimate exists, a chip that states it.
  */
 export function LocationMap(props: Readonly<LocationMapProps>): React.JSX.Element {
-  const { session, onOpenResult, onAreaChange } = props;
+  const { session, onOpenResult, onAreaChange, onError } = props;
   const onAreaChangeRef = useRef(onAreaChange);
   onAreaChangeRef.current = onAreaChange;
   const mapRef = useRef<HTMLDivElement | null>(null);
@@ -45,7 +52,8 @@ export function LocationMap(props: Readonly<LocationMapProps>): React.JSX.Elemen
     if (mapRef.current === null || leafletMap.current !== null) {
       return undefined;
     }
-    const map = L.map(mapRef.current, { center: INITIAL_CENTRE, zoom: INITIAL_ZOOM, zoomControl: true });
+    const kept = loadMapView();
+    const map = L.map(mapRef.current, { center: kept === undefined ? INITIAL_CENTRE : [kept.lat, kept.lon], zoom: kept?.zoom ?? INITIAL_ZOOM, zoomControl: true });
     L.tileLayer(TILE_URL_TEMPLATE, {
       maxZoom: 19,
       // CORS tile requests give the service worker inspectable responses it can cache for offline use.
@@ -60,7 +68,11 @@ export function LocationMap(props: Readonly<LocationMapProps>): React.JSX.Elemen
       const centre = map.getCenter();
       onAreaChangeRef.current({ lat: centre.lat, lon: centre.lng, radiusKm: map.distance(centre, map.getBounds().getNorthEast()) / METRES_PER_KM });
     };
-    map.on('moveend', reportArea);
+    map.on('moveend', () => {
+      const centre = map.getCenter();
+      saveMapView({ lat: centre.lat, lon: centre.lng, zoom: map.getZoom() });
+      reportArea();
+    });
     reportArea();
 
     const observer = new ResizeObserver(() => {
@@ -75,6 +87,16 @@ export function LocationMap(props: Readonly<LocationMapProps>): React.JSX.Elemen
       layer.current = null;
     };
   }, []);
+
+  const locate = (): void => {
+    locateDevice()
+      .then((position) => {
+        leafletMap.current?.setView([position.lat, position.lon], LOCATE_ZOOM);
+      })
+      .catch((err: unknown) => {
+        onError(`Your location could not be found: ${err instanceof Error ? err.message : String(err)}`);
+      });
+  };
 
   const topHypothesis = session?.hypotheses[0];
 
@@ -103,6 +125,9 @@ export function LocationMap(props: Readonly<LocationMapProps>): React.JSX.Elemen
   return (
     <div className={styles.mapContainer}>
       <div ref={mapRef} className={styles.mapCanvas} role="region" aria-label="Map of the estimated location" />
+      <button type="button" className={styles.locateButton} onClick={locate}>
+        Use my location
+      </button>
       {topHypothesis !== undefined && (
         <button type="button" className={styles.mapChip} onClick={onOpenResult}>
           {describeEstimate(topHypothesis)}

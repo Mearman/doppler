@@ -1,7 +1,8 @@
 import { z } from 'zod';
-import { type LocationSession, LocationSessionSchema } from '../schemas';
+import { type LocationSession, LocationSessionSchema, type MapView, MapViewSchema } from '../schemas';
 
 const SESSIONS_KEY = 'doppler_sessions_v1';
+const MAP_VIEW_KEY = 'doppler_map_view_v1';
 
 /**
  * Saves a LocationSession snapshot into local browser storage.
@@ -76,4 +77,34 @@ export function importSessionJson(jsonText: string): LocationSession {
   const parsed: unknown = JSON.parse(jsonText);
 
   return LocationSessionSchema.parse(parsed);
+}
+
+/**
+ * Keeps where the map was left in this browser.
+ * @param view - The centre and zoom to keep.
+ */
+export function saveMapView(view: Readonly<MapView>): void {
+  try {
+    localStorage.setItem(MAP_VIEW_KEY, JSON.stringify(view));
+  } catch (err) {
+    console.warn('Failed to save the map view to localStorage:', err);
+  }
+}
+
+/**
+ * Reads where the map was last left.
+ * @returns The kept view, or undefined when none is kept, storage is unavailable or the kept value is not a valid view.
+ */
+export function loadMapView(): MapView | undefined {
+  try {
+    const raw = localStorage.getItem(MAP_VIEW_KEY);
+    if (raw === null) {
+      return undefined;
+    }
+    const parsed = MapViewSchema.safeParse(JSON.parse(raw));
+
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
 }
