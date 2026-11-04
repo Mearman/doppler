@@ -45,6 +45,7 @@ export function LocationMap(props: Readonly<LocationMapProps>): React.JSX.Elemen
   const onAreaChangeRef = useRef(onAreaChange);
   onAreaChangeRef.current = onAreaChange;
   const mapRef = useRef<HTMLDivElement | null>(null);
+  const [mapReady, setMapReady] = React.useState(false);
   const leafletMap = useRef<L.Map | null>(null);
   const layer = useRef<L.LayerGroup | null>(null);
 
@@ -62,6 +63,7 @@ export function LocationMap(props: Readonly<LocationMapProps>): React.JSX.Elemen
     }).addTo(map);
     layer.current = L.layerGroup().addTo(map);
     leafletMap.current = map;
+    setMapReady(true);
 
     // The visible area, as a centre and the distance from it to the corner, which is the circle that covers the view.
     const reportArea = (): void => {
@@ -94,7 +96,8 @@ export function LocationMap(props: Readonly<LocationMapProps>): React.JSX.Elemen
         leafletMap.current?.setView([position.lat, position.lon], LOCATE_ZOOM);
       })
       .catch((err: unknown) => {
-        onError(`Your location could not be found: ${err instanceof Error ? err.message : String(err)}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        onError(msg.includes('denied') ? msg : `Your location could not be found: ${msg}`);
       });
   };
 
@@ -120,7 +123,7 @@ export function LocationMap(props: Readonly<LocationMapProps>): React.JSX.Elemen
       { color: '#3b82f6', weight: 2, fillColor: '#3b82f6', fillOpacity: 0.15, dashArray: '4, 4' },
     ).addTo(group);
     map.setView([topHypothesis.lat, topHypothesis.lon], LOCATED_ZOOM);
-  }, [topHypothesis]);
+  }, [topHypothesis, mapReady]);
 
   return (
     <div className={styles.mapContainer}>

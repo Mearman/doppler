@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { loadSessionsFromStorage, saveSessionToStorage } from '../../src/browser/storage';
 import { loadDataset } from '../../src/browser/dataset-store';
 import { type DatasetInfo, type DopplerDataset, type DopplerObservation, type LocationSession, LocationSessionSchema } from '../../src/schemas';
-import { emptyDataset } from '../../src/dataset';
 import { type AnalysisStage, WorkerReplySchema } from './worker-protocol';
 import type { ClipSpectrogramData } from './spectrogram-viewer';
 
@@ -46,7 +45,11 @@ export interface Solver {
  * @returns The solver's state and the actions that drive it.
  */
 export function useSolver(): Solver {
-  const [session, setSession] = useState<LocationSession | null>(null);
+  const [session, setSession] = useState<LocationSession | null>(() => {
+    return loadSessionsFromStorage()
+      .map((candidate) => LocationSessionSchema.safeParse(candidate))
+      .find((result) => result.success)?.data ?? null;
+  });
   const [clip, setClip] = useState<ClipSpectrogramData | null>(null);
   const [clipSummary, setClipSummary] = useState<ClipSummary | null>(null);
   const [analysis, setAnalysis] = useState<RunningAnalysis | null>(null);
@@ -55,7 +58,8 @@ export function useSolver(): Solver {
   const workerRef = useRef<Worker | null>(null);
 
   useEffect(() => {
-    if (session !== null) {
+    // Only autosave session if it has new content or was mutated from worker/live action
+    if (session !== null && session.episodes.length > 0) {
       saveSessionToStorage(session);
     }
   }, [session]);
@@ -81,10 +85,14 @@ export function useSolver(): Solver {
 
         return;
       }
-      setError(null);
+      if (reply.type === 'audio_analysed') {
+        setError(null);
+      }
       if (reply.type === 'session') {
         setSession(reply.data);
       } else if (reply.type === 'dataset_updated') {
+        setDatasetInfo(reply.info);
+        // Note: do NOT overwrite session with null when dataset is updated
         setDatasetInfo(reply.info);
       } else {
         setClip(reply.data.spectrogram);
@@ -98,25 +106,29 @@ export function useSolver(): Solver {
       setError(`The analysis worker stopped: ${event.message}`);
     };
 
-    // Resume the most recent saved session that still matches the current schema; an older shape is ignored rather than guessed at.
-    const saved = loadSessionsFromStorage()
-      .map((candidate) => LocationSessionSchema.safeParse(candidate))
-      .find((result) => result.success)?.data;
-    if (saved !== undefined) {
-      setSession(saved);
-    }
-    worker.postMessage({ id: 'init', type: 'init_session', payload: saved === undefined ? {} : { initialSession: saved } });
     // The flight data a person loaded on an earlier visit comes back with the session.
     loadDataset()
       .then((stored) => {
+        const saved = loadSessionsFromStorage()
+          .map((candidate) => LocationSessionSchema.safeParse(candidate))
+          .find((result) => result.success)?.data;
+        if (saved !== undefined) {
+          setSession(saved);
+        }
         if (stored !== undefined) {
           worker.postMessage({ id: 'stored_dataset', type: 'set_dataset', payload: stored });
-        } else {
-          worker.postMessage({ id: 'no_dataset', type: 'set_dataset', payload: emptyDataset() });
         }
+        worker.postMessage({ id: 'init', type: 'init_session', payload: saved === undefined ? {} : { initialSession: saved } });
       })
       .catch((err: unknown) => {
         setError(`Stored flight data could not be read: ${err instanceof Error ? err.message : String(err)}`);
+        const saved = loadSessionsFromStorage()
+          .map((candidate) => LocationSessionSchema.safeParse(candidate))
+          .find((result) => result.success)?.data;
+        if (saved !== undefined) {
+          setSession(saved);
+        }
+        worker.postMessage({ id: 'init', type: 'init_session', payload: saved === undefined ? {} : { initialSession: saved } });
       });
 
     return () => {

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Alert, Button, MantineProvider, Progress } from '@mantine/core';
 import '@mantine/core/styles.css';
@@ -7,15 +7,14 @@ import { ANALYSIS_STAGES, type AnalysisStage } from './worker-protocol';
 import * as styles from '../styles.css';
 import { MapIcon, WaveIcon } from './icons';
 import { LocationMap } from './location-map';
-import { NavTabs, type NavId, panelId, tabId } from './nav-tabs';
 import { useOfflineStatus } from './offline-status';
-import { DataPanel, FilePanel, ListenPanel, ResultPanel, SessionPanel } from './panels';
 import { SpectrogramViewer } from './spectrogram-viewer';
 import { TopBar } from './top-bar';
 import { useFlightData } from './use-flight-data';
 import { type SearchArea, useLiveFeed } from './use-live-feed';
 import { useMicrophone } from './use-microphone';
 import { useSolver } from './use-solver';
+import { UnifiedSidebar } from './unified-sidebar';
 
 /** What each stage of an analysis is doing, as the progress line says it. */
 const STAGE_LABELS: Readonly<Record<AnalysisStage, string>> = {
@@ -40,33 +39,8 @@ export function App(): React.JSX.Element {
   const microphone = useMicrophone({ onObservation: solver.ingestObservation, onError: solver.reportError });
   // A release installs by itself only while nothing is running; the session is autosaved, so the reload keeps the results.
   const offline = useOfflineStatus({ safeToReload: analysis === null && !microphone.isListening });
-  const [activeTab, setActiveTab] = useState<NavId>('listen');
   const [stageView, setStageView] = useState<StageView>('map');
   const busy = analysis !== null;
-  const hasFlightData = solver.datasetInfo !== null && solver.datasetInfo.segmentCount > 0;
-  const openData = (): void => {
-    setActiveTab('data');
-  };
-
-  // A session resumed from storage opens on its result, so a reload returns the person to what they were looking at.
-  const resumed = useRef(false);
-  useEffect(() => {
-    if (!resumed.current && session !== null) {
-      resumed.current = true;
-      if (session.hypotheses.length > 0) {
-        setActiveTab('result');
-      }
-    }
-  }, [session]);
-
-  // An analysis ends on the result, which is what the person ran it for.
-  const wasBusy = useRef(false);
-  useEffect(() => {
-    if (wasBusy.current && !busy) {
-      setActiveTab('result');
-    }
-    wasBusy.current = busy;
-  }, [busy]);
 
   const analyseFile = async (file: Readonly<File>): Promise<void> => {
     try {
@@ -80,27 +54,12 @@ export function App(): React.JSX.Element {
 
         return;
       }
+
       const { samples, sampleRateHz } = await decodeAudioFile(bytes);
       solver.startAnalysis({ id, type: 'process_audio', payload: { rawSamples: samples, sampleRateHz, startEpochSec, episodeId: file.name } }, label, [samples.buffer]);
     } catch (err) {
       solver.reportError(`${file.name} could not be read as audio: ${err instanceof Error ? err.message : String(err)}`);
     }
-  };
-
-  const panels: Readonly<Record<NavId, React.JSX.Element>> = {
-    listen: (
-      <ListenPanel
-        microphone={microphone}
-        flyoverCount={solver.clipSummary?.observationCount ?? session?.observations.length ?? 0}
-        hypothesisCount={session?.hypotheses.length ?? 0}
-        hasFlightData={hasFlightData}
-        onOpenData={openData}
-      />
-    ),
-    file: <FilePanel busy={busy} onFile={analyseFile} session={session} />,
-    data: <DataPanel info={solver.datasetInfo} flightData={flightData} liveFeed={liveFeed} />,
-    result: <ResultPanel session={session} hasFlightData={hasFlightData} onOpenData={openData} />,
-    session: <SessionPanel session={session} />,
   };
 
   return (
@@ -120,8 +79,7 @@ export function App(): React.JSX.Element {
 
       <div className={styles.workspace}>
         <aside className={styles.sidebar}>
-          <NavTabs active={activeTab} onChange={setActiveTab} hasResult={session?.hypotheses[0] !== undefined} />
-          <div className={styles.panel} role="tabpanel" id={panelId(activeTab)} aria-labelledby={tabId(activeTab)}>
+          <div className={styles.panel}>
             {busy && (
               <div className={styles.busy}>
                 <Progress
@@ -141,7 +99,16 @@ export function App(): React.JSX.Element {
                 {solver.error}
               </Alert>
             )}
-            {panels[activeTab]}
+            <UnifiedSidebar
+              microphone={microphone}
+              busy={busy}
+              onFile={analyseFile}
+              session={session}
+              datasetInfo={solver.datasetInfo}
+              flightData={flightData}
+              liveFeed={liveFeed}
+              searchArea={searchArea}
+            />
           </div>
         </aside>
 
@@ -157,7 +124,7 @@ export function App(): React.JSX.Element {
             </button>
           </div>
           <div className={styles.stagePane} data-hidden={stageView !== 'map'}>
-            <LocationMap session={session} onOpenResult={() => { setActiveTab('result'); }} onAreaChange={setSearchArea} onError={solver.reportError} />
+            <LocationMap session={session} onOpenResult={() => { /* no-op in unified layout */ }} onAreaChange={setSearchArea} onError={solver.reportError} />
           </div>
           <div className={`${styles.stagePane} ${styles.spectrogramPane}`} data-hidden={stageView !== 'spectrogram'}>
             <SpectrogramViewer

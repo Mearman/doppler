@@ -40,8 +40,7 @@ test.describe('real recordings', () => {
       test.setTimeout(120_000);
 
       await page.goto('/');
-      await page.getByRole('tab', { name: /file/i }).click();
-      await page.locator('input[type="file"]').setInputFiles(path);
+      await page.getByLabel('Audio or video file to analyse').setInputFiles(path);
 
       const list = page.getByRole('list', { name: 'Detected flyovers' });
       await expect(list).toBeVisible({ timeout: 90_000 });

@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { z } from 'zod';
+import type { BoundingBox } from '../../src/adsb-traces';
+import { loadParquetHistoryDataset } from '../../src/adsb-parquet';
 import { clearDataset, saveDataset } from '../../src/browser/dataset-store';
 import { emptyDataset } from '../../src/dataset';
 import { DopplerDatasetSchema } from '../../src/schemas';
-import { type FlightDataFile, MAX_JSON_CHARS, downloadFlightDataFile, fitsInBrowser, listFlightDataFiles } from './flight-data-sources';
+import {
+  type FlightDataFile,
+  MAX_JSON_CHARS,
+  downloadFlightDataFile,
+  fitsInBrowser,
+  listFlightDataFiles,
+} from './flight-data-sources';
 import type { Solver } from './use-solver';
 
 /** The flight data sources the page offers and what it is doing with them. */
@@ -14,13 +22,17 @@ export interface FlightData {
   readonly catalogue: readonly FlightDataFile[] | null;
   readonly fromFile: (file: Readonly<File>) => Promise<void>;
   readonly fromCatalogue: (file: Readonly<FlightDataFile>) => Promise<void>;
+  readonly fromParquetHistory: (
+    dateIso: string,
+    bbox: Readonly<BoundingBox>,
+    startEpochSec: number,
+    endEpochSec: number,
+  ) => Promise<void>;
   readonly clear: () => Promise<void>;
 }
 
 /**
- * Loads flight data from a local file or the Hugging Face repository, validates it, hands it to the worker and keeps it for the next visit.
- * @param solver - The solver, which receives the dataset and reports failures.
- * @returns The sources and their state.
+ * Loads flight data from a local file, published JSON, or adsb-core Parquet history, validates it, hands it to the worker and keeps it for the next visit.
  */
 export function useFlightData(solver: Readonly<Pick<Solver, 'setDataset' | 'reportError'>>): FlightData {
   const [working, setWorking] = useState<string | null>(null);
@@ -34,7 +46,9 @@ export function useFlightData(solver: Readonly<Pick<Solver, 'setDataset' | 'repo
       .then(setCatalogue)
       .catch((err: unknown) => {
         if (!controller.signal.aborted) {
-          reportError(`The list of published flight data could not be read: ${err instanceof Error ? err.message : String(err)}`);
+          reportError(
+            `The list of published flight data could not be read: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
       });
 
@@ -73,7 +87,9 @@ export function useFlightData(solver: Readonly<Pick<Solver, 'setDataset' | 'repo
     async (file: Readonly<File>): Promise<void> => {
       await run(`Loading ${file.name}`, async () => {
         if (!fitsInBrowser(file.size)) {
-          throw new Error(`${file.name} is larger than the ${String(MAX_JSON_CHARS)} characters a browser can parse in one piece`);
+          throw new Error(
+            `${file.name} is larger than the ${String(MAX_JSON_CHARS)} characters a browser can parse in one piece`,
+          );
         }
         await adopt(await file.text(), file.name);
       });
@@ -93,6 +109,32 @@ export function useFlightData(solver: Readonly<Pick<Solver, 'setDataset' | 'repo
     [adopt, run],
   );
 
+  const fromParquetHistory = useCallback(
+    async (
+      dateIso: string,
+      bbox: Readonly<BoundingBox>,
+      startEpochSec: number,
+      endEpochSec: number,
+    ): Promise<void> => {
+      await run(`Loading ${dateIso} flight history from adsb-core`, async () => {
+        const dataset = await loadParquetHistoryDataset({
+          dateIso,
+          bbox,
+          startEpochSec,
+          endEpochSec,
+          onProgress: (p) => {
+            setWorking(
+              `Scanning ${dateIso} (${String(p.rowGroup)}/${String(p.totalRowGroups)} chunks, ${String(p.matchingPings)} pings)`,
+            );
+          },
+        });
+        setDataset(dataset);
+        await saveDataset(dataset);
+      });
+    },
+    [run, setDataset],
+  );
+
   const clear = useCallback(async (): Promise<void> => {
     await run('Removing flight data', async () => {
       setDataset(emptyDataset());
@@ -100,5 +142,5 @@ export function useFlightData(solver: Readonly<Pick<Solver, 'setDataset' | 'repo
     });
   }, [run, setDataset]);
 
-  return { working, catalogue, fromFile, fromCatalogue, clear };
+  return { working, catalogue, fromFile, fromCatalogue, fromParquetHistory, clear };
 }

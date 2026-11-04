@@ -18,8 +18,7 @@ test.describe('flight data', () => {
     await expect(page.getByRole('button', { name: /simulate/i })).toHaveCount(0);
     await expect(page.getByText('No flight data', { exact: true })).toBeVisible();
 
-    await page.getByRole('tab', { name: /file/i }).click();
-    await page.locator('input[type="file"]').setInputFiles(SYNTHETIC_WAV);
+    await page.getByLabel('Audio or video file to analyse').setInputFiles(SYNTHETIC_WAV);
     await expect(page.getByRole('list', { name: 'Detected flyovers' })).toBeVisible({ timeout: 15000 });
     // Flyovers are found, but with no flights to match them against there is no location.
     await expect(page.getByText('No estimate yet')).toBeVisible();
@@ -30,8 +29,7 @@ test.describe('flight data', () => {
     await loadSyntheticFlightData(page);
     await analyseSyntheticClip(page);
 
-    await page.getByRole('tab', { name: /data/i }).click();
-    await page.getByRole('button', { name: 'Remove flight data' }).click();
+    await page.getByRole('button', { name: /Remove flight data|Clear/i }).click();
     await expect(page.getByText('None loaded.')).toBeVisible({ timeout: 10000 });
   });
 
@@ -55,8 +53,6 @@ test.describe('flight data', () => {
       }),
     );
     await page.goto('/');
-    await page.getByRole('tab', { name: /data/i }).click();
-
     const list = page.getByRole('list', { name: 'Published flight data' });
     await expect(list.getByRole('listitem')).toHaveCount(2);
     await expect(list.getByRole('listitem').first()).toContainText('too large for a browser');
@@ -84,9 +80,8 @@ test.describe('flight data', () => {
       const requested = await mockRelay(page);
       await page.clock.install();
       await page.goto('/');
-      await page.getByRole('tab', { name: /data/i }).click();
       await expect(page.getByLabel(/key/i)).toHaveCount(0);
-      await page.getByRole('button', { name: 'Start live feed' }).click();
+      await page.getByRole('button', { name: /Start live feed|Start Live ADS-B Feed/i }).click();
 
       // The clock moves one poll at a time and each answer needs real time to arrive, so the test advances it until enough polls have been answered.
       await expect
@@ -101,15 +96,14 @@ test.describe('flight data', () => {
       await expect(page.getByText(/[1-9]\d* flight segments/)).toBeVisible();
       expect(requested[0]).toMatch(/^https:\/\/doppler-adsb-relay\.joseph-b4f\.workers\.dev\/v2\/point\/-?[\d.]+\/-?[\d.]+\/\d+$/);
 
-      await page.getByRole('button', { name: 'Stop live feed' }).click();
+      await page.getByRole('button', { name: /Stop live feed|Stop Live Feed/i }).click();
       await expect(page.getByText('None loaded.')).toBeVisible({ timeout: 10000 });
     });
 
     test('asks for no more than the relay forwards when the map is zoomed far out', async ({ page }) => {
       const requested = await mockRelay(page);
       await page.goto('/');
-      await page.getByRole('tab', { name: /data/i }).click();
-      await page.getByRole('button', { name: 'Start live feed' }).click();
+      await page.getByRole('button', { name: /Start live feed|Start Live ADS-B Feed/i }).click();
 
       await expect.poll(() => requested.length).toBeGreaterThanOrEqual(1);
       const radiusNm = Number(requested[0]?.split('/').pop());
@@ -120,8 +114,7 @@ test.describe('flight data', () => {
     test('says so when the map shows more than the feed covers', async ({ page }) => {
       await mockRelay(page);
       await page.goto('/');
-      await page.getByRole('tab', { name: /data/i }).click();
-      await page.getByRole('button', { name: 'Start live feed' }).click();
+      await page.getByRole('button', { name: /Start live feed|Start Live ADS-B Feed/i }).click();
 
       await expect(page.getByText('The map shows more than the feed covers')).toBeVisible();
     });
@@ -129,19 +122,23 @@ test.describe('flight data', () => {
     test('stops and says why when the relay refuses the query', async ({ page }) => {
       await page.route('https://doppler-adsb-relay.joseph-b4f.workers.dev/**', async (route) => route.fulfill({ status: 404, headers: { 'access-control-allow-origin': '*' } }));
       await page.goto('/');
-      await page.getByRole('tab', { name: /data/i }).click();
       await page.getByRole('button', { name: 'Start live feed' }).click();
 
       await expect(page.getByRole('alert')).toContainText('does not serve this query');
-      await expect(page.getByRole('button', { name: 'Start live feed' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Start live feed' })).toBeVisible({ timeout: 10000 });
     });
   });
 
   test('loads a dataset file given as the data file fixture', async ({ page }) => {
     await page.goto('/');
-    await page.getByRole('tab', { name: /data/i }).click();
     await page.getByLabel('Flight data file').setInputFiles(SYNTHETIC_DATA_FILE);
 
     await expect(page.getByText('Flight segments')).toBeVisible({ timeout: 10000 });
+  });
+
+  test('offers historical flight queries from adsb-core parquet without requiring tabs', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByText('Historical Flights (adsb-core)')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Fetch Area' })).toBeVisible();
   });
 });

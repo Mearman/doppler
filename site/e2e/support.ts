@@ -20,9 +20,12 @@ export const SYNTHETIC_DATA_FILE = { name: 'flights.dataset.json', mimeType: 'ap
  * @param page - The page under test.
  */
 export async function loadSyntheticFlightData(page: Page): Promise<void> {
-  await page.getByRole('tab', { name: /data/i }).click();
+  const tab = page.getByRole('tab', { name: /data/i });
+  if (await tab.count() > 0) {
+    await tab.click();
+  }
   await page.getByLabel('Flight data file').setInputFiles(SYNTHETIC_DATA_FILE);
-  await expect(page.getByText('Flight segments')).toBeVisible({ timeout: 10000 });
+  await expect(page.getByText(/Flight Trajectory Data|Flight segments/i)).toBeVisible({ timeout: 10000 });
 }
 
 /**
@@ -30,7 +33,10 @@ export async function loadSyntheticFlightData(page: Page): Promise<void> {
  * @param page - The page under test.
  */
 export async function analyseSyntheticClip(page: Page): Promise<void> {
-  await page.getByRole('tab', { name: /file/i }).click();
-  await page.locator('input[type="file"]').setInputFiles(SYNTHETIC_WAV);
-  await expect(page.getByText('Estimated location')).toBeVisible({ timeout: 30000 });
+  const tab = page.getByRole('tab', { name: /file/i });
+  if (await tab.count() > 0) {
+    await tab.click();
+  }
+  await page.getByLabel('Audio or video file to analyse').setInputFiles(SYNTHETIC_WAV);
+  await expect(page.getByText('Open in OpenStreetMap')).toBeVisible({ timeout: 30000 });
 }
