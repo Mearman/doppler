@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
-import { Badge, Button, Progress, Text } from '@mantine/core';
-import type { DatasetInfo, LocationSession } from '../../src/schemas';
+import { Badge, Button, Progress, Text, Tooltip } from '@mantine/core';
+import { deleteSessionFromStorage, loadSessionsFromStorage } from '../../src/browser/storage';
+import type { DatasetInfo, LocationSession, SearchConstraints } from '../../src/schemas';
 import * as styles from '../styles.css';
 import { describeBuild } from '../describe-build';
 import { buildIdentity } from './build-info';
@@ -30,20 +31,37 @@ export interface UnifiedSidebarProps {
   readonly flightData: Readonly<FlightData>;
   readonly liveFeed: Readonly<LiveFeed>;
   readonly searchArea: Readonly<SearchArea>;
+  readonly onUpdateConstraints?: (constraints: Readonly<SearchConstraints>) => void;
+  readonly onSetTemperature?: (tempCelsius: number) => void;
+  readonly onResetSession?: (initialSession?: Readonly<LocationSession>) => void;
   readonly onOpenResult?: () => void;
 }
 
 export function UnifiedSidebar(props: Readonly<UnifiedSidebarProps>): React.JSX.Element {
-  const { microphone, busy, onFile, session, datasetInfo, flightData, liveFeed, searchArea } = props;
+  const {
+    microphone,
+    busy,
+    onFile,
+    session,
+    datasetInfo,
+    flightData,
+    liveFeed,
+    searchArea,
+    onUpdateConstraints,
+    onSetTemperature,
+    onResetSession,
+  } = props;
   const inputRef = useRef<HTMLInputElement | null>(null);
   const datasetInputRef = useRef<HTMLInputElement | null>(null);
   const [historyDate, setHistoryDate] = useState(DEFAULT_HISTORY_DATE);
+  const [, setRefreshTick] = useState(0);
 
   const meter = ((microphone.noiseFloorDb - METER_FLOOR_DB) / (METER_CEILING_DB - METER_FLOOR_DB)) * 100;
   const top = session?.hypotheses[0];
   const hasFlightData = datasetInfo !== null && datasetInfo.segmentCount > 0;
   const workingData = flightData.working !== null;
   const { label, title } = describeBuild(buildIdentity);
+  const savedSessions = loadSessionsFromStorage();
 
   const exportSession = (): void => {
     if (session === null) {
@@ -69,7 +87,6 @@ export function UnifiedSidebar(props: Readonly<UnifiedSidebarProps>): React.JSX.
       maxLon: searchArea.lon + lonRadius,
     };
 
-    // Full 24-hour UTC window for the selected date
     const dayStartSec = Math.floor(new Date(`${historyDate}T00:00:00Z`).getTime() / 1000);
     const dayEndSec = dayStartSec + 86400;
 
@@ -99,11 +116,15 @@ export function UnifiedSidebar(props: Readonly<UnifiedSidebarProps>): React.JSX.
               <dd>{formatCoordinates(top.lat, top.lon)}</dd>
               <dt>Likelihood</dt>
               <dd>{`${(top.probability * 100).toFixed(0)}%`}</dd>
-              <dt>95% ellipse</dt>
+              <Tooltip label="The 95% confidence region around the estimated observer coordinate.">
+                <dt title="The 95% confidence region around the estimated observer coordinate.">95% ellipse</dt>
+              </Tooltip>
               <dd>{`${formatDistance(top.ellipseSemiMajorMeters)} × ${formatDistance(top.ellipseSemiMinorMeters)}`}</dd>
               <dt>Altitude</dt>
               <dd>{`${top.altMeters.toFixed(0)} m AMSL`}</dd>
-              <dt>Residual</dt>
+              <Tooltip label="Root-mean-square pitch difference between observed and modelled Doppler curves (lower is better).">
+                <dt title="Root-mean-square pitch difference between observed and modelled Doppler curves (lower is better).">Residual</dt>
+              </Tooltip>
               <dd>{`${top.rmsFreqResidualHz.toFixed(2)} Hz RMS`}</dd>
             </dl>
           </>
@@ -230,8 +251,8 @@ export function UnifiedSidebar(props: Readonly<UnifiedSidebarProps>): React.JSX.
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '6px' }}>
             <input
               type="date"
-              className={styles.dropInput}
-              style={{ position: 'relative', width: 'auto', padding: '4px 8px', fontSize: '12px' }}
+              aria-label="Historical query date"
+              style={{ background: '#0f0f13', color: '#e6e6ee', border: '1px solid #2a2a34', borderRadius: '6px', padding: '4px 8px', fontSize: '12px' }}
               value={historyDate}
               onChange={(e) => { setHistoryDate(e.target.value); }}
               disabled={workingData}
@@ -302,14 +323,98 @@ export function UnifiedSidebar(props: Readonly<UnifiedSidebarProps>): React.JSX.
         )}
       </section>
 
-      {/* 5. Session Actions & Version */}
-      <section className={styles.card} aria-label="Session">
+      {/* 5. Solver Parameters & Constraints */}
+      <section className={styles.card} aria-label="Solver Parameters">
+        <h2 className={styles.cardTitle}>Solver Parameters</h2>
         <div className={styles.row}>
-          <span>Session ID: <code className={styles.mono}>{session?.id ?? 'none'}</code></span>
-          <Button size="compact-xs" variant="light" disabled={session === null} onClick={exportSession}>
-            Export JSON
-          </Button>
+          <label htmlFor="ambient-temp-input">Ambient Temp (°C)</label>
+          <input
+            id="ambient-temp-input"
+            type="number"
+            aria-label="Ambient temperature (°C)"
+            style={{ width: '72px', background: '#0f0f13', color: '#e6e6ee', border: '1px solid #2a2a34', borderRadius: '6px', padding: '4px 8px', fontSize: '13px' }}
+            value={session?.ambientTempCelsius ?? 20}
+            onChange={(e) => {
+              const val = Number(e.target.value);
+              if (Number.isFinite(val)) {
+                onSetTemperature?.(val);
+              }
+            }}
+          />
         </div>
+        <div className={styles.row} style={{ marginTop: '6px' }}>
+          <label htmlFor="enf-grid-select">Power Grid (ENF)</label>
+          <select
+            id="enf-grid-select"
+            aria-label="Power Grid (ENF)"
+            style={{ background: '#0f0f13', color: '#e6e6ee', border: '1px solid #2a2a34', borderRadius: '6px', padding: '4px 8px', fontSize: '13px' }}
+            value={session?.constraints.enfNominalHz ?? ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val === '50' || val === '60') {
+                onUpdateConstraints?.({ enfNominalHz: val });
+              } else {
+                onUpdateConstraints?.({});
+              }
+            }}
+          >
+            <option value="">Auto</option>
+            <option value="50">50 Hz (Europe/UK/Asia)</option>
+            <option value="60">60 Hz (Americas)</option>
+          </select>
+        </div>
+      </section>
+
+      {/* 6. Session Actions & Version */}
+      <section className={styles.card} aria-label="Session">
+        <h2 className={styles.cardTitle}>Session Management</h2>
+        <div className={styles.row}>
+          <span>ID: <code className={styles.mono}>{session?.id ?? 'none'}</code></span>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            <Button size="compact-xs" variant="light" disabled={session === null} onClick={exportSession}>
+              Export
+            </Button>
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              color="red"
+              onClick={() => {
+                onResetSession?.();
+                setRefreshTick((t) => t + 1);
+              }}
+            >
+              Reset
+            </Button>
+          </div>
+        </div>
+        {savedSessions.length > 1 && (
+          <div style={{ marginTop: '8px' }}>
+            <span style={{ fontSize: '12px', color: '#a3a3b8' }}>Saved sessions:</span>
+            <ul className={styles.catalogue} style={{ marginTop: '4px' }}>
+              {savedSessions.slice(0, 3).map((s) => (
+                <li key={s.id} className={styles.catalogueItem}>
+                  <span className={styles.mono} style={{ fontSize: '11px' }}>{s.id.slice(0, 16)} ({s.observations.length} obs)</span>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    <Button size="compact-xs" variant="subtle" onClick={() => { onResetSession?.(s); }}>
+                      Load
+                    </Button>
+                    <Button
+                      size="compact-xs"
+                      variant="subtle"
+                      color="red"
+                      onClick={() => {
+                        deleteSessionFromStorage(s.id);
+                        setRefreshTick((t) => t + 1);
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className={styles.row} style={{ marginTop: '6px' }}>
           <span style={{ fontSize: '12px', color: '#a3a3b8' }}>Version</span>
           <a className={styles.link} href={buildIdentity.url} target="_blank" rel="noopener noreferrer" title={title}>

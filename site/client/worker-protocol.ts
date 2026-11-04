@@ -32,6 +32,9 @@ const InitSessionRequestSchema = z.object({
 /** Changes the search constraints of the session. */
 const UpdateConstraintsRequestSchema = z.object({ id: z.string(), type: z.literal('update_constraints'), payload: SearchConstraintsSchema });
 
+/** Updates the ambient temperature of the session in degrees Celsius. */
+const SetTemperatureRequestSchema = z.object({ id: z.string(), type: z.literal('set_temperature'), payload: z.number() });
+
 /** Adds one observation, for example from the live microphone, to the session. */
 const IngestObservationRequestSchema = z.object({ id: z.string(), type: z.literal('ingest_observation'), payload: DopplerObservationSchema });
 
@@ -63,6 +66,7 @@ export const WorkerRequestSchema = z.discriminatedUnion('type', [
   SetDatasetRequestSchema,
   InitSessionRequestSchema,
   UpdateConstraintsRequestSchema,
+  SetTemperatureRequestSchema,
   IngestObservationRequestSchema,
   ProcessAudioRequestSchema,
   ProcessWavRequestSchema,

@@ -79,6 +79,7 @@ function analyse(id: string, input: Readonly<AnalysisInput>): void {
       constraints: enf.detected ? { enfNominalHz: enf.nominalHz === '50' ? '50' : '60' } : {},
     });
 
+    engine.updateEnfSignature(enf);
     engine.startEpisode(input.startEpochSec);
     for (const obs of observations) {
       engine.ingestObservation(obs);
@@ -151,6 +152,14 @@ self.onmessage = (event: MessageEvent<unknown>) => {
       case 'update_constraints': {
         engine ??= new DopplerSessionEngine({ dataset: currentDataset });
         const updated = engine.updateConstraints(req.payload);
+        reply({ id: req.id, success: true, type: 'session', data: updated });
+
+        return;
+      }
+
+      case 'set_temperature': {
+        engine ??= new DopplerSessionEngine({ dataset: currentDataset });
+        const updated = engine.updateTemperature(req.payload);
         reply({ id: req.id, success: true, type: 'session', data: updated });
 
         return;

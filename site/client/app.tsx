@@ -108,6 +108,9 @@ export function App(): React.JSX.Element {
               flightData={flightData}
               liveFeed={liveFeed}
               searchArea={searchArea}
+              onUpdateConstraints={solver.updateConstraints}
+              onSetTemperature={solver.setTemperature}
+              onResetSession={solver.resetSession}
             />
           </div>
         </aside>

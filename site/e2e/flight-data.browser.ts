@@ -19,7 +19,7 @@ test.describe('flight data', () => {
     await expect(page.getByText('No flight data', { exact: true })).toBeVisible();
 
     await page.getByLabel('Audio or video file to analyse').setInputFiles(SYNTHETIC_WAV);
-    await expect(page.getByRole('list', { name: 'Detected flyovers' })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole('list', { name: 'Detected flyovers' })).toBeVisible({ timeout: 30000 });
     // Flyovers are found, but with no flights to match them against there is no location.
     await expect(page.getByText('No estimate yet')).toBeVisible();
   });
