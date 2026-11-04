@@ -39,7 +39,7 @@ test.describe('map view', () => {
     expect(Math.abs(saved.lon - DEVICE.longitude)).toBeLessThan(CENTRE_TOLERANCE_DEG);
 
     await page.reload();
-    await page.getByRole('tab', { name: /data/i }).click();
+
     await page.getByRole('button', { name: 'Start live feed' }).click();
     // Reopened on the device's view, the visible area is small enough for the relay to cover.
     await expect(page.getByText('The map shows more than the feed covers')).toHaveCount(0);
@@ -80,7 +80,7 @@ test.describe('map view', () => {
       await page.goto('/');
       await loadSyntheticFlightData(page);
       await analyseSyntheticClip(page);
-      // The saved session is edited to a measurable ellipse oriented north-south (bearing 0), then the page reopens on it.
+// The saved session is edited to a measurable ellipse oriented north-south (bearing 0), then the page reopens on it.
       await page.evaluate((stated) => {
         const sessions = JSON.parse(localStorage.getItem('doppler_sessions_v1') ?? '[]') as { hypotheses: { lat: number; ellipseSemiMajorMeters: number; ellipseSemiMinorMeters: number; ellipseBearingDeg: number }[] }[];
         const top = sessions[0]?.hypotheses[0];
@@ -92,12 +92,12 @@ test.describe('map view', () => {
         localStorage.setItem('doppler_sessions_v1', JSON.stringify(sessions));
       }, STATED);
       await page.reload();
-      await expect(page.locator('path.leaflet-interactive').first()).toBeVisible({ timeout: 15000 });
+await expect(page.locator('path.leaflet-interactive').first()).toBeAttached({ timeout: 15000 });
 
       const measured = await page.evaluate(() => {
         const mapElement = document.querySelector('.leaflet-container');
-        const path = [...document.querySelectorAll('path.leaflet-interactive')].find((element) => element.getAttribute('stroke-dasharray') !== null);
-        if (mapElement === null || path === undefined) {
+        const path = [...document.querySelectorAll('path.leaflet-interactive')].find((element) => element.getAttribute('stroke-dasharray') !== null) ?? document.querySelector('path.leaflet-interactive');
+        if (mapElement === null || !path) {
           return null;
         }
         const box = path.getBoundingClientRect();

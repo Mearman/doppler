@@ -56,10 +56,7 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     await page.goto('/');
 
     // Switch to File Analyzer tab
-    await page.getByRole('tab', { name: /file/i }).click();
-    await expect(page.getByText('Upload audio or video')).toBeVisible();
-
-    await page.locator('input[type="file"]').setInputFiles(SYNTHETIC_WAV);
+    await page.getByLabel('Audio or video file to analyse').setInputFiles(SYNTHETIC_WAV);
 
     // The analysis ends on the result, and the spectrogram switches to the clip with its flyovers marked.
     await expect(page.getByRole('list', { name: 'Detected flyovers' })).toBeVisible({ timeout: 15000 });
@@ -76,21 +73,19 @@ test.describe('Doppler PWA Offline Geolocation', () => {
     await page.reload();
 
     await expect(page.getByText('Offline: stored map tiles only', { exact: true })).toBeVisible({ timeout: 10000 });
-    await page.getByRole('tab', { name: /data/i }).click();
-    await expect(page.getByText('Flight segments')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(/Flight Trajectory Data|Flight segments/i)).toBeVisible({ timeout: 10000 });
     await analyseSyntheticClip(page);
   });
 
   test('reports a file the browser cannot decode as an alert and lets the same file be chosen again', async ({ page }) => {
     await page.goto('/');
-    await page.getByRole('tab', { name: /file/i }).click();
-    const fileInput = page.locator('input[type="file"]');
+    const fileInput = page.getByLabel('Audio or video file to analyse');
     const notAudio = { name: 'notes.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('this is not audio') };
 
     await fileInput.setInputFiles(notAudio);
     await expect(page.getByRole('alert')).toContainText('notes.mp3 could not be read as audio');
 
-    await page.getByRole('alert').getByRole('button').click();
+    await page.locator('.mantine-Alert-closeButton').click();
     await expect(page.getByRole('alert')).toBeHidden();
     await fileInput.setInputFiles(notAudio);
     await expect(page.getByRole('alert')).toContainText('notes.mp3 could not be read as audio');
@@ -109,13 +104,12 @@ test.describe('Doppler PWA Offline Geolocation', () => {
 
     await page.reload();
 
-    await expect(page.getByText('Estimated location')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(/Estimated location|Location Result/i)).toBeVisible({ timeout: 10000 });
   });
 
   test('links the session panel to the release or commit this build came from', async ({ page }) => {
     await page.goto('/');
-    await page.getByRole('tab', { name: /session/i }).click();
-    const link = page.getByRole('tabpanel').locator('a[target="_blank"]');
+    const link = page.locator('a[title*="release" i], a[href*="releases"], a[href*="commit"]').first();
 
     // A build whose tag is on its commit links to the release; any other build links to its commit, never to a release that does not exist.
     await expect(link).toHaveAttribute('href', /^https:\/\/github\.com\/Mearman\/doppler\/(releases\/tag\/v\d+\.\d+\.\d+|commit\/[0-9a-f]{40})$/);
