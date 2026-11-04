@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MAX_RADIUS_NM } from '../src/live-limits';
+import relay from './relay';
 import { upstreamUrl } from './route';
 
 describe('upstreamUrl', () => {
@@ -24,8 +25,41 @@ describe('upstreamUrl', () => {
   });
 
   it('serves nothing but the point query', () => {
-    for (const path of ['/', '/v2/all', '/v2/hex/abc123', '/v2/point/1/2', '/v2/point/1/2/3/4', '/v2/point/a/b/50', '/api/0/me', '/v2/point/../../etc/passwd']) {
+    for (const path of [
+      '/',
+      '/v2/all',
+      '/v2/hex/abc123',
+      '/v2/point/1/2',
+      '/v2/point/1/2/3/4',
+      '/v2/point/a/b/50',
+      '/api/0/me',
+      '/v2/point/../../etc/passwd',
+    ]) {
       expect(upstreamUrl(path)).toBeUndefined();
     }
+  });
+});
+
+describe('relay Worker handler', () => {
+  it('handles OPTIONS preflight with CORS headers', async () => {
+    const req = new Request('https://doppler-adsb-relay.joseph-b4f.workers.dev/v2/point/51.75/-1.26/50', {
+      method: 'OPTIONS',
+    });
+    const res = await relay.fetch(req);
+    expect(res.status).toBe(204);
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*');
+  });
+
+  it('returns 429 with Retry-After and CORS headers when rate limiter rejects', async () => {
+    const req = new Request('https://doppler-adsb-relay.joseph-b4f.workers.dev/v2/point/51.75/-1.26/50', {
+      headers: { 'cf-connecting-ip': '203.0.113.5' },
+    });
+    const limitMock = vi.fn(async () => Promise.resolve({ success: false }));
+    const res = await relay.fetch(req, { RATE_LIMITER: { limit: limitMock } });
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe('10');
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(limitMock).toHaveBeenCalledWith({ key: '203.0.113.5' });
   });
 });
