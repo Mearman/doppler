@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { loadSessionsFromStorage, saveSessionToStorage } from '../../src/browser/storage';
 import { loadDataset } from '../../src/browser/dataset-store';
-import { type DatasetInfo, type DopplerDataset, type DopplerObservation, type LocationSession, LocationSessionSchema } from '../../src/schemas';
+import { type DatasetInfo, type DopplerDataset, type DopplerObservation, type LocationSession, LocationSessionSchema, type SearchConstraints } from '../../src/schemas';
 import { type AnalysisStage, WorkerReplySchema } from './worker-protocol';
 import type { ClipSpectrogramData } from './spectrogram-viewer';
 
@@ -37,6 +37,9 @@ export interface Solver {
   readonly startAnalysis: (request: AnalysisRequest, label: string, transfer: readonly Transferable[]) => void;
   readonly ingestObservation: (observation: Readonly<DopplerObservation>) => void;
   readonly setDataset: (dataset: Readonly<DopplerDataset>) => void;
+  readonly updateConstraints: (constraints: Readonly<SearchConstraints>) => void;
+  readonly setTemperature: (tempCelsius: number) => void;
+  readonly resetSession: (initialSession?: Readonly<LocationSession>) => void;
 }
 
 /**
@@ -150,9 +153,44 @@ export function useSolver(): Solver {
     workerRef.current?.postMessage({ id: `dataset_${String(Date.now())}`, type: 'set_dataset', payload: dataset });
   }, []);
 
+  const updateConstraints = useCallback((constraints: Readonly<SearchConstraints>): void => {
+    workerRef.current?.postMessage({ id: `const_${String(Date.now())}`, type: 'update_constraints', payload: constraints });
+  }, []);
+
+  const setTemperature = useCallback((tempCelsius: number): void => {
+    workerRef.current?.postMessage({ id: `temp_${String(Date.now())}`, type: 'set_temperature', payload: tempCelsius });
+  }, []);
+
+  const resetSession = useCallback((initialSession?: Readonly<LocationSession>): void => {
+    if (initialSession === undefined) {
+      setClip(null);
+      setClipSummary(null);
+    }
+    workerRef.current?.postMessage({
+      id: `init_${String(Date.now())}`,
+      type: 'init_session',
+      payload: initialSession === undefined ? {} : { initialSession },
+    });
+  }, []);
+
   const dismissError = useCallback((): void => {
     setError(null);
   }, []);
 
-  return { session, clip, clipSummary, analysis, datasetInfo, error, dismissError, reportError: setError, startAnalysis, ingestObservation, setDataset };
+  return {
+    session,
+    clip,
+    clipSummary,
+    analysis,
+    datasetInfo,
+    error,
+    dismissError,
+    reportError: setError,
+    startAnalysis,
+    ingestObservation,
+    setDataset,
+    updateConstraints,
+    setTemperature,
+    resetSession,
+  };
 }

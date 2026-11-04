@@ -358,5 +358,31 @@ describe('DopplerSessionEngine hypothesis scoring', () => {
     // The earlier flyover that nothing explains still costs the hypothesis its full penalty, and a fit's log-likelihood is never positive.
     expect(top?.logPosterior).toBeLessThan(-unmatchedObservationLogPenalty(stray));
   });
+
+  it('applies detected ENF signature to session and updates constraints', () => {
+    const engine = new DopplerSessionEngine({ dataset: SYNTHETIC_DATASET });
+    const updated = engine.updateEnfSignature({
+      detected: true,
+      nominalHz: '50',
+      measuredFreqHz: 50.01,
+      snrDb: 14.5,
+      regionHint: 'Europe / UK (50 Hz Grid)',
+    });
+
+    expect(updated.enfSignature.detected).toBe(true);
+    expect(updated.enfSignature.nominalHz).toBe('50');
+    expect(updated.constraints.enfNominalHz).toBe('50');
+  });
+
+  it('updates ambient temperature and re-evaluates observations', () => {
+    const engine = new DopplerSessionEngine({ dataset: SYNTHETIC_DATASET });
+    const ep = engine.startEpisode(SESSION_START_EPOCH_SEC);
+    engine.ingestObservation(alphaObservation({ id: 'a1', episodeId: ep.id }));
+    const updated = engine.updateTemperature(10);
+
+    expect(updated.ambientTempCelsius).toBe(10);
+    expect(updated.observations).toHaveLength(1);
+    expect(updated.hypotheses.length).toBeGreaterThan(0);
+  });
 });
 

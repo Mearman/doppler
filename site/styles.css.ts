@@ -52,6 +52,8 @@ globalStyle('button, [role="tab"], a, input, select', {
 });
 
 // Leaflet's zoom buttons are 30px wide on any pointer; a finger needs the full target.
+globalStyle('.leaflet-container .leaflet-control-attribution a', { textDecoration: 'underline', color: '#004466' });
+
 globalStyle('.leaflet-bar a', {
   '@media': {
     '(pointer: coarse)': { width: `${String(TOUCH_TARGET_PX)}px`, height: `${String(TOUCH_TARGET_PX)}px`, lineHeight: `${String(TOUCH_TARGET_PX)}px` },

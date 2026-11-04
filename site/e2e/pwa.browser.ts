@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
 import { SYNTHETIC_WAV, analyseSyntheticClip, loadSyntheticFlightData } from './support';
 
@@ -182,6 +183,44 @@ test.describe('Doppler PWA Offline Geolocation', () => {
 
       expect(undersized).toEqual([]);
     });
+  });
+
+  test('passes axe-core accessibility audit with zero serious or critical violations', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('header')).toBeVisible();
+    const results = await new AxeBuilder({ page }).analyze();
+    const seriousOrCritical = results.violations.filter(
+      (v) => v.impact === 'serious' || v.impact === 'critical',
+    );
+    expect(seriousOrCritical).toEqual([]);
+  });
+
+  test('wires temperature, ENF constraint, palette toggle, tooltips, and session reset', async ({ page }) => {
+    await page.goto('/');
+    await loadSyntheticFlightData(page);
+    await analyseSyntheticClip(page);
+
+    // ENF signature detected and displayed in header
+    await expect(page.getByText('ENF 50 Hz grid')).toBeVisible();
+
+    // Tooltips on 95% ellipse and Residual
+    await expect(page.locator('dt[title*="confidence region"]')).toBeVisible();
+    await expect(page.locator('dt[title*="Root-mean-square"]')).toBeVisible();
+
+    // Palette toggle
+    const paletteBtn = page.getByRole('button', { name: /Palette:/ });
+    await expect(paletteBtn).toHaveText('Palette: Magma');
+    await paletteBtn.click();
+    await expect(paletteBtn).toHaveText('Palette: Cividis');
+
+    // Temperature input
+    const tempInput = page.getByLabel('Ambient temperature (°C)');
+    await tempInput.fill('15');
+    await expect(tempInput).toHaveValue('15');
+
+    // Session reset
+    await page.getByRole('button', { name: 'Reset', exact: true }).click();
+    await expect(page.getByText('No estimate yet')).toBeVisible();
   });
 });
 

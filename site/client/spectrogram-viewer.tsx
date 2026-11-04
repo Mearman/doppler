@@ -23,9 +23,12 @@ export interface SpectrogramViewerProps {
   readonly onClearLive?: () => void;
 }
 
+export type SpectrogramPalette = 'magma' | 'cividis';
+
 export interface DbColorOptions {
   readonly minDb?: number;
   readonly maxDb?: number;
+  readonly palette?: SpectrogramPalette;
 }
 
 /** Power, in decibels, drawn as the darkest colour: the ambient silence of a quiet room. */
@@ -44,6 +47,14 @@ export function dbToRgb(powerDb: number, options: DbColorOptions = {}): readonly
   const minDb = options.minDb ?? DB_FLOOR;
   const maxDb = options.maxDb ?? DB_CEILING;
   const t = Math.max(0, Math.min(1, (powerDb - minDb) / (maxDb - minDb)));
+
+  if (options.palette === 'cividis') {
+    return [
+      Math.round(0 + 253 * t),
+      Math.round(32 + 199 * t),
+      Math.round(76 + (t < 0.5 ? 60 * (t * 2) : 60 - 66 * ((t - 0.5) * 2))),
+    ] as const;
+  }
 
   if (t < 0.2) {
     const s = t / 0.2;
@@ -74,11 +85,13 @@ export function dbToRgb(powerDb: number, options: DbColorOptions = {}): readonly
 const LEGEND_STOPS = 12;
 
 /** The legend's CSS gradient, sampled from the same function that colours the plot so the two cannot disagree. */
-const LEGEND_GRADIENT = `linear-gradient(to right, ${Array.from({ length: LEGEND_STOPS + 1 }, (_, index) => {
-  const [r, g, b] = dbToRgb(DB_FLOOR + (index / LEGEND_STOPS) * (DB_CEILING - DB_FLOOR));
+function buildLegendGradient(palette: SpectrogramPalette): string {
+  return `linear-gradient(to right, ${Array.from({ length: LEGEND_STOPS + 1 }, (_, index) => {
+    const [r, g, b] = dbToRgb(DB_FLOOR + (index / LEGEND_STOPS) * (DB_CEILING - DB_FLOOR), { palette });
 
-  return `rgb(${String(r)} ${String(g)} ${String(b)})`;
-}).join(', ')})`;
+    return `rgb(${String(r)} ${String(g)} ${String(b)})`;
+  }).join(', ')})`;
+}
 
 /** Plot margins in CSS pixels, shared by drawing and pointer hit-testing so the two cannot drift. */
 const LEFT_MARGIN = 44;
@@ -162,6 +175,7 @@ export function SpectrogramViewer(props: Readonly<SpectrogramViewerProps>): Reac
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [readout, setReadout] = useState<Readout | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [palette, setPalette] = useState<SpectrogramPalette>('magma');
   // The container's size in CSS pixels, kept current so that a rotation, a window resize or the layout changing redraws the canvas at its new size instead of stretching the old one.
   const [size, setSize] = useState({ width: 0, height: 0 });
 
@@ -215,7 +229,7 @@ export function SpectrogramViewer(props: Readonly<SpectrogramViewerProps>): Reac
       return;
     }
 
-    const { frames, minFreq, maxFreq, binStep, startTime, timeSpan, isClip } = view;
+    const { frames, minFreq, maxFreq, binStep, startTime, timeSpan } = view;
     const freqToY = (freq: number): number => TOP_MARGIN + (1 - (freq - minFreq) / (maxFreq - minFreq)) * plotHeight;
     const timeToX = (timeSec: number): number => LEFT_MARGIN + ((timeSec - startTime) / timeSpan) * plotWidth;
 
@@ -228,7 +242,7 @@ export function SpectrogramViewer(props: Readonly<SpectrogramViewerProps>): Reac
       }
       for (let py = 0; py < plotHeight; py += 1) {
         const freq = minFreq + (1 - py / plotHeight) * (maxFreq - minFreq);
-        const [r, g, b] = dbToRgb(frame.powerDb[binIndexAt(freq, minFreq, binStep, frame.powerDb.length)] ?? -100);
+        const [r, g, b] = dbToRgb(frame.powerDb[binIndexAt(freq, minFreq, binStep, frame.powerDb.length)] ?? -100, { palette });
         const index = (py * plotWidth + px) * 4;
         data[index] = r;
         data[index + 1] = g;
@@ -288,7 +302,7 @@ export function SpectrogramViewer(props: Readonly<SpectrogramViewerProps>): Reac
       ctx.moveTo(x, TOP_MARGIN + plotHeight);
       ctx.lineTo(x, TOP_MARGIN + plotHeight + 4);
       ctx.stroke();
-      ctx.fillText(formatElapsed(isClip ? tick : tick - timeSpan), x, TOP_MARGIN + plotHeight + 6);
+      ctx.fillText(formatElapsed(tick), x, TOP_MARGIN + plotHeight + 6);
     }
 
     // Detected flyovers: the tracked ridge and the closest point of approach.
@@ -329,7 +343,7 @@ export function SpectrogramViewer(props: Readonly<SpectrogramViewerProps>): Reac
         ctx.fillText(`#${String(index + 1)} ${observation.kinematics.inferredSpeedMps.toFixed(0)} m/s`, cpaX + (roomRight ? 9 : -9), cpaY - 3);
       }
     });
-  }, [view, visibleObservations, size]);
+  }, [view, visibleObservations, size, palette]);
 
   const handlePointer = (event: React.PointerEvent<HTMLCanvasElement>): void => {
     const canvas = canvasRef.current;
@@ -355,7 +369,7 @@ export function SpectrogramViewer(props: Readonly<SpectrogramViewerProps>): Reac
       x,
       y,
       freqHz,
-      timeLabel: formatElapsed(view.isClip ? timeSec : timeSec - view.timeSpan),
+      timeLabel: formatElapsed(timeSec),
       powerDb: frame?.powerDb[binIndexAt(freqHz, view.minFreq, view.binStep, frame.powerDb.length)],
     });
   };
@@ -372,18 +386,28 @@ export function SpectrogramViewer(props: Readonly<SpectrogramViewerProps>): Reac
         <span className={styles.modeTag} data-mode={isListening ? 'live' : view?.isClip === true ? 'clip' : 'idle'}>{mode}</span>
         <span className={styles.readout} aria-live="off">
           {readout === null
-            ? view !== null && visibleObservations.length > 0
-              ? `${String(visibleObservations.length)} flyover${visibleObservations.length === 1 ? '' : 's'} detected`
-              : ''
+            ? view !== null
+              ? `${view.minFreq.toFixed(0)}–${view.maxFreq.toFixed(0)} Hz (${view.binStep.toFixed(2)} Hz/bin)${visibleObservations.length > 0 ? ` · ${String(visibleObservations.length)} flyover${visibleObservations.length === 1 ? '' : 's'} detected` : ''}`
+              : '65–400 Hz (0.98 Hz/bin)'
             : `${readout.timeLabel} · ${readout.freqHz.toFixed(1)} Hz${readout.powerDb === undefined ? '' : ` · ${readout.powerDb.toFixed(0)} dB`}`}
         </span>
         <span className={styles.legend} aria-hidden="true">
-          <span className={styles.legendBar} style={{ background: LEGEND_GRADIENT }} />
+          <span className={styles.legendBar} style={{ background: buildLegendGradient(palette) }} />
           <span className={styles.legendLabels}>
             <span>{`${String(DB_FLOOR)} dB`}</span>
             <span>{`${String(DB_CEILING)} dB`}</span>
           </span>
         </span>
+        <Button
+          size="compact-xs"
+          variant="subtle"
+          color="gray"
+          onClick={() => {
+            setPalette((prev) => (prev === 'magma' ? 'cividis' : 'magma'));
+          }}
+        >
+          {palette === 'magma' ? 'Palette: Magma' : 'Palette: Cividis'}
+        </Button>
         {isListening && onClearLive !== undefined && (
           <Button size="compact-xs" variant="subtle" color="gray" onClick={onClearLive}>
             Clear

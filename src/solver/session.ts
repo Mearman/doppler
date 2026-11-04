@@ -7,6 +7,7 @@ import { computeSegmentCpa } from '../physics/retarded-time';
 import type {
   DopplerDataset,
   DopplerObservation,
+  EnfSignature,
   GeoPoint3D,
   HypothesisMatch,
   LinearFlightSegment,
@@ -136,6 +137,49 @@ export class DopplerSessionEngine {
       constraints: { ...this.session.constraints, ...constraints },
       hypotheses: updatedHypotheses,
     };
+
+    return this.session;
+  }
+
+  /**
+   * Records a detected ENF signature on the session and applies its nominal grid frequency to constraints if none is set.
+   * @param enf - The detected Electrical Network Frequency signature.
+   * @returns The updated LocationSession.
+   */
+  public updateEnfSignature(enf: Readonly<EnfSignature>): LocationSession {
+    this.session = {
+      ...this.session,
+      updatedAtEpochSec: nowEpochSec(),
+      enfSignature: { ...enf },
+    };
+    if (
+      enf.detected &&
+      (enf.nominalHz === '50' || enf.nominalHz === '60') &&
+      this.session.constraints.enfNominalHz === undefined
+    ) {
+      return this.updateConstraints({ enfNominalHz: enf.nominalHz });
+    }
+
+    return this.session;
+  }
+
+  /**
+   * Updates the ambient air temperature in degrees Celsius and re-evaluates all observations with the new speed of sound.
+   * @param ambientTempCelsius - Ambient temperature in Celsius.
+   * @returns The updated LocationSession.
+   */
+  public updateTemperature(ambientTempCelsius: number): LocationSession {
+    const observations = [...this.session.observations];
+    this.session = {
+      ...this.session,
+      updatedAtEpochSec: nowEpochSec(),
+      ambientTempCelsius,
+      observations: [],
+      hypotheses: [],
+    };
+    for (const observation of observations) {
+      this.applyObservation(observation);
+    }
 
     return this.session;
   }
