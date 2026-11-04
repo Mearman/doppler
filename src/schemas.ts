@@ -280,6 +280,18 @@ export const LocationSessionSchema = define(
 export type LocationSession = z.infer<typeof LocationSessionSchema>;
 
 /**
+ * Where the map was last left, kept so that the page reopens on the same view.
+ */
+export const MapViewSchema = define(
+  z.object({
+    lat: z.number().min(MIN_LATITUDE_DEGREES).max(MAX_LATITUDE_DEGREES),
+    lon: z.number().min(MIN_LONGITUDE_DEGREES).max(MAX_LONGITUDE_DEGREES),
+    zoom: z.number().nonnegative(),
+  }),
+);
+export type MapView = z.infer<typeof MapViewSchema>;
+
+/**
  * What a person needs to know about the flight data a dataset holds.
  */
 export const DatasetInfoSchema = define(

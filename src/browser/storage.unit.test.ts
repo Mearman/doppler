@@ -6,8 +6,10 @@ import {
   deleteSessionFromStorage,
   exportSessionJson,
   importSessionJson,
+  loadMapView,
   loadSessionById,
   loadSessionsFromStorage,
+  saveMapView,
   saveSessionToStorage,
 } from './storage';
 
@@ -97,5 +99,21 @@ describe('Browser Storage and Session Serialization', () => {
 
   it('rejects an imported session that does not match the schema', () => {
     expect(() => importSessionJson(JSON.stringify({ id: 'not-a-session' }))).toThrow();
+  });
+
+  it('keeps the map view and reads it back', () => {
+    expect(loadMapView()).toBeUndefined();
+
+    saveMapView({ lat: 51.75, lon: -1.26, zoom: 11 });
+
+    expect(loadMapView()).toEqual({ lat: 51.75, lon: -1.26, zoom: 11 });
+  });
+
+  it('treats a kept map view that is not valid as absent', () => {
+    localStorage.setItem('doppler_map_view_v1', JSON.stringify({ lat: 120, lon: 0, zoom: 3 }));
+    expect(loadMapView()).toBeUndefined();
+
+    localStorage.setItem('doppler_map_view_v1', 'not json');
+    expect(loadMapView()).toBeUndefined();
   });
 });

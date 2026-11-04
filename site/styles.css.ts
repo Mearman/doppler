@@ -373,6 +373,22 @@ export const mapChip = style({
   cursor: 'pointer',
 });
 
+/** The control that centres the map on the device, top right so it does not cover the estimate chip at the bottom left. */
+export const locateButton = style({
+  position: 'absolute',
+  top: 12,
+  right: 12,
+  zIndex: 800,
+  padding: '8px 12px',
+  borderRadius: vars.radius.card,
+  border: `1px solid ${vars.color.border}`,
+  backgroundColor: vars.color.surface,
+  color: vars.color.text,
+  font: 'inherit',
+  fontSize: 13,
+  cursor: 'pointer',
+});
+
 export const spectrogramSection = style({
   flex: 1,
   minHeight: 0,

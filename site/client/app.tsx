@@ -157,7 +157,7 @@ export function App(): React.JSX.Element {
             </button>
           </div>
           <div className={styles.stagePane} data-hidden={stageView !== 'map'}>
-            <LocationMap session={session} onOpenResult={() => { setActiveTab('result'); }} onAreaChange={setSearchArea} />
+            <LocationMap session={session} onOpenResult={() => { setActiveTab('result'); }} onAreaChange={setSearchArea} onError={solver.reportError} />
           </div>
           <div className={`${styles.stagePane} ${styles.spectrogramPane}`} data-hidden={stageView !== 'spectrogram'}>
             <SpectrogramViewer
